@@ -56,6 +56,18 @@ class OnlineManager:
         self._lobby_updates = []
         self._remote_states = {}
         self._invite_rejects = []
+        # Background polling (non-blocking for main loop)
+        self._bg_running = False
+        self._bg_thread = None
+        self._bg_lock = threading.Lock()
+        self._bg_cached_invite = None
+        self._bg_cached_lobby = None
+        self._bg_cached_game_start = None
+        self._bg_cached_remotes = {}
+        self._bg_pending_state = None  # (lobby_id, state)
+        self._bg_fail_count = 0
+        self._bg_enabled = True
+        self._ensure_bg_thread()
 
     def _connect(self, timeout=1.5):
         try:
@@ -200,6 +212,160 @@ class OnlineManager:
 
     def is_online(self):
         return self._online_status
+
+    # --- Background polling for per-frame checks (non-blocking) ---
+    def _ensure_bg_thread(self):
+        if self._bg_thread and self._bg_thread.is_alive():
+            return
+        self._bg_running = True
+        self._bg_thread = threading.Thread(target=self._bg_loop, daemon=True)
+        self._bg_thread.start()
+
+    def _bg_one_shot(self, payload, timeout=0.6):
+        # quiet one-shot without spam prints
+        pid = str(self.save.get("player_id","")).strip()
+        s = None
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(timeout)
+            s.connect((self.host, self.port))
+            s.settimeout(timeout)
+            s.sendall((json.dumps(payload) + "\n").encode("utf-8"))
+            # recv one line
+            s.settimeout(timeout)
+            buf = b""
+            while b"\n" not in buf:
+                chunk = s.recv(4096)
+                if not chunk:
+                    break
+                buf += chunk
+                if len(buf) > 8192:
+                    break
+            try: s.close()
+            except: pass
+            if not buf:
+                return None
+            line = buf.split(b"\n")[0].decode("utf-8").strip()
+            if not line:
+                return None
+            return json.loads(line)
+        except Exception:
+            try:
+                if s: s.close()
+            except: pass
+            return None
+
+    def _bg_loop(self):
+        fail = 0
+        while self._bg_running:
+            try:
+                pid = str(self.save.get("player_id","")).strip()
+                if not is_valid_id(pid):
+                    time.sleep(0.6)
+                    continue
+                # poll invites
+                resp = self._bg_one_shot({"type":"get_invites","player_id":pid}, timeout=0.6)
+                if resp and resp.get("invites") is not None:
+                    with self._lock:
+                        # cache first invite for game popup
+                        invs = resp.get("invites") or []
+                        if invs:
+                            # keep pending for poll_invite cache
+                            self._bg_cached_invite = invs[0]
+                            # also push to _pending_invites for compatibility
+                            self._pending_invites = invs
+                        else:
+                            self._bg_cached_invite = None
+                            self._pending_invites = []
+                    fail = 0
+                    self._online_status = True
+                elif resp is None:
+                    fail += 1
+                # poll lobby
+                resp2 = self._bg_one_shot({"type":"get_lobby","player_id":pid}, timeout=0.6)
+                if resp2 is not None:
+                    with self._lock:
+                        lob = resp2.get("lobby")
+                        self._bg_cached_lobby = lob
+                        self._lobby = lob
+                    if resp2.get("lobby") is not None:
+                        fail = 0
+                    # if lob is None but previously cached, keep fail handling
+                # game_start if lobby exists
+                with self._lock:
+                    lid = (self._bg_cached_lobby or {}).get("lobby_id") if isinstance(self._bg_cached_lobby, dict) else None
+                if lid:
+                    resp3 = self._bg_one_shot({"type":"check_game_start","lobby_id":lid}, timeout=0.6)
+                    if resp3 and resp3.get("game_start"):
+                        with self._lock:
+                            self._bg_cached_game_start = lid
+                            self._game_start_lobby = lid
+                    else:
+                        # do not clear immediately, let game poll
+                        pass
+                # pending player state send (fire-and-forget)
+                pending = None
+                with self._bg_lock:
+                    if self._bg_pending_state:
+                        pending = self._bg_pending_state
+                        self._bg_pending_state = None
+                if pending:
+                    lid_s, state = pending
+                    self._bg_one_shot({"type":"player_state","lobby_id":lid_s,"player_id":pid,"state":state}, timeout=0.6)
+                # poll remote states if in lobby
+                with self._lock:
+                    cur_lid = (self._bg_cached_lobby or {}).get("lobby_id") if isinstance(self._bg_cached_lobby, dict) else None
+                if cur_lid:
+                    resp4 = self._bg_one_shot({"type":"get_player_states","lobby_id":cur_lid,"player_id":pid}, timeout=0.6)
+                    if resp4 and "states" in resp4:
+                        with self._lock:
+                            self._bg_cached_remotes = resp4["states"]
+                            self._remote_states = resp4["states"]
+                        fail = 0
+                # sleep with backoff when failing
+                if fail >= 3:
+                    time.sleep(0.9)
+                else:
+                    time.sleep(0.25)
+            except Exception:
+                time.sleep(0.5)
+                fail += 1
+
+    def queue_player_state(self, lobby_id, state):
+        with self._bg_lock:
+            self._bg_pending_state = (lobby_id, state)
+
+    def get_cached_invite(self):
+        with self._lock:
+            if self._bg_cached_invite:
+                # consume once? keep for poll_invite compatibility
+                inv = self._bg_cached_invite
+                # do not auto-clear here, let poll_invite consume
+                return inv
+            if self._pending_invites:
+                return self._pending_invites[0]
+            return None
+
+    def get_cached_lobby(self):
+        with self._lock:
+            return self._bg_cached_lobby if self._bg_cached_lobby is not None else self._lobby
+
+    def get_cached_game_start(self, lobby_id=None):
+        with self._lock:
+            if self._bg_cached_game_start:
+                lid = self._bg_cached_game_start
+                self._bg_cached_game_start = None
+                self._game_start_lobby = None
+                return lid
+            if self._game_start_lobby:
+                lid = self._game_start_lobby
+                self._game_start_lobby = None
+                return lid
+            return None
+
+    def get_cached_remotes(self, lobby_id=None):
+        with self._lock:
+            return dict(self._bg_cached_remotes or self._remote_states or {})
 
     # --- Persistent bağlantı: lobby/invite için ---
     def connect_persistent(self):
@@ -424,6 +590,10 @@ class OnlineManager:
             self._game_start_lobby=None
 
     def send_player_state(self, lobby_id, state):
+        # non-blocking: if bg thread alive, queue
+        if getattr(self, "_bg_thread", None) and self._bg_thread.is_alive():
+            self.queue_player_state(lobby_id, state)
+            return True
         pid=str(self.save.get("player_id","")).strip()
         if self._persistent_sock and self._persistent_running:
             try:
@@ -441,10 +611,9 @@ class OnlineManager:
         return bool(resp and resp.get("ok"))
 
     def poll_invite(self):
-        # Polling via server (one-shot)
+        # blocking version for one-off / tests (kept)
         pid = str(self.save.get("player_id","")).strip()
         if not is_valid_id(pid):
-            # fallback to local
             with self._lock:
                 lst=getattr(self, "_pending_invites", [])
                 if lst:
@@ -465,7 +634,6 @@ class OnlineManager:
             lst=resp["invites"]
             if lst:
                 return lst[0]
-        # fallback local
         with self._lock:
             lst=getattr(self, "_pending_invites", [])
             if lst:
@@ -489,18 +657,15 @@ class OnlineManager:
             with self._lock:
                 self._lobby=resp["lobby"]
             return resp["lobby"]
-        # check if lobby was closed (server returns None)
         if resp and resp.get("lobby") is None:
             with self._lock:
                 if getattr(self, "_lobby", None):
-                    # lobby closed
                     self._lobby=None
                     return None
         with self._lock:
             return getattr(self, "_lobby", None)
 
     def poll_game_start(self, lobby_id=None):
-        # lobby_id verildiyse tekrar get_lobby yapma
         lid = lobby_id
         if not lid:
             lobby=self.poll_lobby()

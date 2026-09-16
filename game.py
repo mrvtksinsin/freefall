@@ -353,18 +353,24 @@ class Game:
                 try: audio.stop_izmir_marsi()
                 except: pass
 
-        # Online invite/lobby polling — throttled (0.2s) her durumda davet gelebilir
+        # Online invite/lobby polling — throttled (0.2s) non-blocking (bg thread)
         self._poll_timer += dt
         if self._poll_timer >= 0.20:
             self._poll_timer = 0.0
             if self.online_mgr:
                 try:
-                    inv = self.online_mgr.poll_invite()
+                    # non-blocking cache reads (bg thread handles network)
+                    if hasattr(self.online_mgr, "get_cached_invite"):
+                        inv = self.online_mgr.get_cached_invite()
+                    else:
+                        inv = self.online_mgr.poll_invite()
                     if inv and not self.pending_invite:
                         self.pending_invite = inv
                         audio.play("levelup")
-                    # lobby güncellemeleri
-                    lob = self.online_mgr.poll_lobby()
+                    if hasattr(self.online_mgr, "get_cached_lobby"):
+                        lob = self.online_mgr.get_cached_lobby()
+                    else:
+                        lob = self.online_mgr.poll_lobby()
                     if lob:
                         self.lobby_id = lob.get("lobby_id")
                         self.lobby_players = lob.get("players", [])
@@ -375,7 +381,6 @@ class Game:
                         self._lobby_gone_count = 0
                     else:
                         if self.state in ("lobby", "vs_online") and self.lobby_id:
-                            # üst üste 2 kez None gelirse kapat (lobby veya vs_online)
                             cnt = getattr(self, "_lobby_gone_count", 0) + 1
                             self._lobby_gone_count = cnt
                             if cnt >= 2:
@@ -389,9 +394,14 @@ class Game:
                                 self._lobby_gone_count = 0
                         else:
                             self._lobby_gone_count = 0
-                    # game_start — lob.id ile tek bağlantı
                     if self.lobby_id:
-                        gid = self.online_mgr.poll_game_start(self.lobby_id)
+                        if hasattr(self.online_mgr, "get_cached_game_start"):
+                            gid = self.online_mgr.get_cached_game_start(self.lobby_id)
+                            if not gid:
+                                # fallback to bg cached without param
+                                gid = self.online_mgr.get_cached_game_start()
+                        else:
+                            gid = self.online_mgr.poll_game_start(self.lobby_id)
                         if gid:
                             self.lobby_id = gid
                             self.start_multiplayer_game(gid)
@@ -529,7 +539,7 @@ class Game:
                     if not c.collected and self.vs_bot.rect.colliderect(c.rect()):
                         c.collected=True
                         self.vs_bot.coins+=c.value
-            # online multiplayer sync — throttled (0.08s) to avoid flooding
+            # online multiplayer sync — throttled (0.08s) non-blocking
             if self.state=="vs_online" and self.online_mgr and self.lobby_id:
                 self._vs_sync_timer += dt
                 if self._vs_sync_timer >= 0.08:
@@ -539,7 +549,10 @@ class Game:
                         self.online_mgr.send_player_state(self.lobby_id, my_state)
                     except: pass
                     try:
-                        remotes = self.online_mgr.poll_remote_states(self.lobby_id)
+                        if hasattr(self.online_mgr, "get_cached_remotes"):
+                            remotes = self.online_mgr.get_cached_remotes(self.lobby_id)
+                        else:
+                            remotes = self.online_mgr.poll_remote_states(self.lobby_id)
                         for pid, st in remotes.items():
                             if pid != str(self.save.get("player_id")):
                                 self.vs_remote = st
