@@ -110,6 +110,14 @@ def load_save():
         for ch in CHARACTERS:
             if ch["level"] <= effective_level and ch["id"] not in out["unlocked_characters"]:
                 out["unlocked_characters"].append(ch["id"])
+        # FINAL: gecersiz karakter ID'lerini temizle (test kalanlari soytari/ayi vb. 18->10 gecis)
+        valid_ids = {c["id"] for c in CHARACTERS}
+        out["unlocked_characters"] = [cid for cid in out["unlocked_characters"] if cid in valid_ids]
+        if not out["unlocked_characters"]:
+            out["unlocked_characters"] = ["cop_adam"]
+        # secili karakter gecersizse cop_adam'a dondur
+        if out.get("selected_character") not in valid_ids:
+            out["selected_character"] = "cop_adam"
         # bölüm sistemi migration — 23 bölüm (1-22 + FINAL 23), kesin sıralı kilit
         if "unlocked_levels" not in out or not isinstance(out["unlocked_levels"], list) or not out["unlocked_levels"]:
             out["unlocked_levels"] = [1]

@@ -79,7 +79,7 @@ LEVELS = [
     {"level": 23, "name": "FINAL",          "distance": 302000,"bg": (12,  12,  28),  "wall": (40,  40,  80),  "obstacle": (90,  70,  140),   "accent": (255,215,0)},
 ]
 
-# Karakterler - seviye ile açılma (18 karakter)
+# Karakterler - FINAL RELEASE: 10 karakter (seviye ile acilma)
 CHARACTERS = [
     {"id": "cop_adam",    "name": "Cop Adam",   "level": 1, "color": (80,80,80),   "accent": (200,200,200)},
     {"id": "soylu",       "name": "Soylu",      "level": 2, "color": (180,30,30),  "accent": (255,215,0)},
@@ -91,14 +91,6 @@ CHARACTERS = [
     {"id": "sihirbaz",    "name": "Sihirbaz",   "level": 8, "color": (90,30,150),  "accent": (180,100,255)},
     {"id": "asker",       "name": "Asker",      "level": 9, "color": (60,100,40),  "accent": (120,180,90)},
     {"id": "balon",       "name": "Balon",      "level": 10,"color": (255,200,50), "accent": (255,100,100)},
-    {"id": "soytari",     "name": "Soytari",    "level": 4, "color": (200,40,120), "accent": (255,220,40)},
-    {"id": "ayi",         "name": "Ayi",        "level": 5, "color": (120,80,50),  "accent": (230,200,160)},
-    {"id": "tavuk",       "name": "Tavuk",      "level": 6, "color": (255,240,180),"accent": (255,80,40)},
-    {"id": "robot",       "name": "Robot",      "level": 7, "color": (160,170,180),"accent": (80,220,255)},
-    {"id": "iskelet",     "name": "Iskelet",    "level": 8, "color": (230,230,220),"accent": (60,60,60)},
-    {"id": "korsan",      "name": "Korsan",     "level": 9, "color": (40,40,90),   "accent": (200,40,40)},
-    {"id": "gotik_kiz",   "name": "Gotik Kiz",  "level": 10,"color": (120,20,60),  "accent": (180,80,160)},
-    {"id": "gotik_erkek", "name": "Gotik Erkek","level": 10,"color": (30,30,50),   "accent": (140,80,180)},
 ]
 
 # Mağaza - her kategori x10 (toplam 40 ürün)
