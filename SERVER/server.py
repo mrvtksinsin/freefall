@@ -221,9 +221,14 @@ def handle_client(conn, addr):
             invites.pop((from_id, to_id), None)
             global lobby_counter
             with LOBBY_LOCK:
+                # eski stale lobileri temizle (ayni oyunculari iceren)
+                for lid in list(lobbies.keys()):
+                    if from_id in lobbies[lid].get("players", []) or to_id in lobbies[lid].get("players", []):
+                        lobbies.pop(lid, None)
+                        print(f"[SERVER] Stale lobby {lid} cleaned before new", flush=True)
                 lobby_counter += 1
                 lobby_id = f"lobby_{lobby_counter}_{from_id}_{to_id}"
-                lobbies[lobby_id] = {"players": [from_id, to_id], "ready": {from_id: False, to_id: False}, "host": from_id, "states": {}}
+                lobbies[lobby_id] = {"players": [from_id, to_id], "ready": {from_id: False, to_id: False}, "host": from_id, "states": {}, "created": time.time()}
             print(f"[SERVER] Lobby created: {lobby_id} {from_id} + {to_id}", flush=True)
             resp = {"ok": True, "lobby_id": lobby_id, "players": [from_id, to_id]}
             conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
@@ -328,6 +333,16 @@ def handle_client(conn, addr):
                     conn_db.execute("UPDATE players SET online=0 WHERE player_id=?", (pid,))
                     conn_db.commit()
                     conn_db.close()
+                # lobby cleanup: abrurt disconnectte lobiyi kapat, diger oyuncuyu kurtar
+                with LOBBY_LOCK:
+                    to_remove = [lid for lid, lob in lobbies.items() if pid in lob.get("players", [])]
+                    for lid in to_remove:
+                        lobbies.pop(lid, None)
+                        print(f"[SERVER] Lobby {lid} closed due to disconnect {pid}", flush=True)
+                # pending invite temizle
+                for k in list(invites.keys()):
+                    if pid in k:
+                        invites.pop(k, None)
             resp = {"ok": True}
             conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
 

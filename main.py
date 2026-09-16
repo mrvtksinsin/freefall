@@ -95,6 +95,14 @@ def main():
                 if event.type == pygame.QUIT:
                     try: save_system.save_game(game.save)
                     except: pass
+                    try:
+                        if hasattr(game, 'online_mgr') and game.online_mgr:
+                            if getattr(game, 'lobby_id', None):
+                                try: game.online_mgr.leave_lobby(game.lobby_id)
+                                except: pass
+                            try: game.online_mgr.disconnect()
+                            except: pass
+                    except: pass
                     running = False
                 elif event.type == pygame.KEYDOWN and event.key == getattr(pygame, 'K_AC_BACK', -1):
                     # Android geri tuşu — ESC ile aynı: doğrudan ana menü (pause açma)

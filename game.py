@@ -374,14 +374,16 @@ class Game:
                                 self.state = "lobby"
                         self._lobby_gone_count = 0
                     else:
-                        if self.state == "lobby" and self.lobby_id:
-                            # üst üste 2 kez None gelirse kapat
+                        if self.state in ("lobby", "vs_online") and self.lobby_id:
+                            # üst üste 2 kez None gelirse kapat (lobby veya vs_online)
                             cnt = getattr(self, "_lobby_gone_count", 0) + 1
                             self._lobby_gone_count = cnt
                             if cnt >= 2:
                                 self.lobby_id = None
                                 self.lobby_players = []
                                 self.lobby_ready = {}
+                                if self.state == "vs_online":
+                                    self.vs_remote = None
                                 self.state = "online_menu"
                                 self.online_error = "Oyuncu lobiden ayrıldı."
                                 self._lobby_gone_count = 0
