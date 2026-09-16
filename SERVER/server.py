@@ -1,8 +1,5 @@
 """
-FREEFALL Gerçek Server — SQLite + TCP
-Çalıştır: python SERVER/server.py
-Port: 47822 (SERVER/config.py)
-Protokol: JSON satır (newline-delimited)
+FREEFALL Gerçek Server — SQLite + TCP (one-shot polling)
 """
 import socket
 import threading
@@ -14,7 +11,6 @@ import re
 import time
 from datetime import datetime
 
-# Config
 try:
     from config import SERVER_HOST, SERVER_PORT, DB_PATH, NICK_MIN, NICK_MAX
 except ImportError:
@@ -25,8 +21,13 @@ except ImportError:
     NICK_MAX = 16
 
 DB_LOCK = threading.Lock()
+LOBBY_LOCK = threading.Lock()
 
 NICK_RE = re.compile(r"^[A-Za-z0-9_ÇĞİÖŞÜçğıöşü ]+$")
+
+invites = {}
+lobbies = {}
+lobby_counter = 0
 
 def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -95,7 +96,6 @@ def handle_client(conn, addr):
             conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
             print(f"[SERVER] Request: INVALID_JSON from {addr[0]}", flush=True)
             return
-
         t = msg.get("type")
         print(f"[SERVER] Request: {t.upper() if t else 'UNKNOWN'} from {addr[0]}", flush=True)
 
@@ -172,6 +172,139 @@ def handle_client(conn, addr):
             else:
                 resp = {"found": False, "error": "Bu ID ile oyuncu bulunamadı."}
                 print(f"[SERVER] SEARCH {target} -> NOT FOUND", flush=True)
+            conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+
+        elif t == "invite":
+            from_id = str(msg.get("from_id", "")).strip()
+            to_id = str(msg.get("to_id", "")).strip()
+            if not is_valid_id(from_id) or not is_valid_id(to_id):
+                resp = {"ok": False, "error": "ID 5 rakam olmalı"}
+                conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+                return
+            with DB_LOCK:
+                conn_db = sqlite3.connect(DB_PATH, check_same_thread=False)
+                cur = conn_db.cursor()
+                cur.execute("SELECT nickname FROM players WHERE player_id=?", (from_id,))
+                from_row = cur.fetchone()
+                cur.execute("SELECT nickname FROM players WHERE player_id=?", (to_id,))
+                to_row = cur.fetchone()
+                conn_db.close()
+            if not from_row or not to_row:
+                resp = {"ok": False, "error": "Oyuncu bulunamadı."}
+                conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+                return
+            invites[(from_id, to_id)] = {"from_nick": from_row[0], "timestamp": time.time()}
+            print(f"[SERVER] INVITE {from_id} ({from_row[0]}) -> {to_id} ({to_row[0]})", flush=True)
+            resp = {"ok": True}
+            conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+
+        elif t == "get_invites":
+            pid = str(msg.get("player_id", "")).strip()
+            pending = []
+            now = time.time()
+            for (frm, to), info in list(invites.items()):
+                if to == pid:
+                    if now - info["timestamp"] > 60:
+                        invites.pop((frm, to), None)
+                    else:
+                        pending.append({"from_id": frm, "from_nick": info["from_nick"]})
+            resp = {"invites": pending}
+            conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+
+        elif t == "invite_accept":
+            from_id = str(msg.get("from_id", "")).strip()
+            to_id = str(msg.get("to_id", "")).strip()
+            if (from_id, to_id) not in invites:
+                resp = {"ok": False, "error": "Davet bulunamadı."}
+                conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+                return
+            invites.pop((from_id, to_id), None)
+            global lobby_counter
+            with LOBBY_LOCK:
+                lobby_counter += 1
+                lobby_id = f"lobby_{lobby_counter}_{from_id}_{to_id}"
+                lobbies[lobby_id] = {"players": [from_id, to_id], "ready": {from_id: False, to_id: False}, "host": from_id, "states": {}}
+            print(f"[SERVER] Lobby created: {lobby_id} {from_id} + {to_id}", flush=True)
+            resp = {"ok": True, "lobby_id": lobby_id, "players": [from_id, to_id]}
+            conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+
+        elif t == "invite_reject":
+            from_id = str(msg.get("from_id", "")).strip()
+            to_id = str(msg.get("to_id", "")).strip()
+            invites.pop((from_id, to_id), None)
+            print(f"[SERVER] Invite rejected: {from_id} -> {to_id}", flush=True)
+            resp = {"ok": True}
+            conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+
+        elif t == "get_lobby":
+            pid = str(msg.get("player_id", "")).strip()
+            found = None
+            with LOBBY_LOCK:
+                for lid, lob in lobbies.items():
+                    if pid in lob["players"]:
+                        found = {"lobby_id": lid, "players": lob["players"], "ready": lob["ready"]}
+                        break
+            resp = {"lobby": found}
+            conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+
+        elif t == "ready":
+            lobby_id = str(msg.get("lobby_id", "")).strip()
+            pid = str(msg.get("player_id", "")).strip()
+            ready = bool(msg.get("ready", False))
+            with LOBBY_LOCK:
+                lobby = lobbies.get(lobby_id)
+                if lobby and pid in lobby["players"]:
+                    lobby["ready"][pid] = ready
+                    print(f"[SERVER] READY {pid}={ready} in {lobby_id}", flush=True)
+                    if all(lobby["ready"].values()) and len(lobby["players"]) == 2:
+                        print(f"[SERVER] GAME_START {lobby_id}", flush=True)
+            resp = {"ok": True}
+            conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+
+        elif t == "check_game_start":
+            lobby_id = str(msg.get("lobby_id", "")).strip()
+            with LOBBY_LOCK:
+                lobby = lobbies.get(lobby_id)
+                if lobby and all(lobby["ready"].values()) and len(lobby["players"]) == 2:
+                    resp = {"game_start": True, "lobby_id": lobby_id}
+                else:
+                    resp = {"game_start": False}
+            conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+
+        elif t == "lobby_leave":
+            lobby_id = str(msg.get("lobby_id", "")).strip()
+            pid = str(msg.get("player_id", "")).strip()
+            with LOBBY_LOCK:
+                lobby = lobbies.get(lobby_id)
+                if lobby and pid in lobby["players"]:
+                    lobbies.pop(lobby_id, None)
+                    print(f"[SERVER] Lobby {lobby_id} left by {pid}, closed", flush=True)
+            resp = {"ok": True}
+            conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+
+        elif t == "player_state":
+            lobby_id = str(msg.get("lobby_id", "")).strip()
+            pid = str(msg.get("player_id", "")).strip()
+            state = msg.get("state", {})
+            with LOBBY_LOCK:
+                lobby = lobbies.get(lobby_id)
+                if lobby and pid in lobby["players"]:
+                    if "states" not in lobby:
+                        lobby["states"] = {}
+                    lobby["states"][pid] = state
+            resp = {"ok": True}
+            conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+
+        elif t == "get_player_states":
+            lobby_id = str(msg.get("lobby_id", "")).strip()
+            pid = str(msg.get("player_id", "")).strip()
+            with LOBBY_LOCK:
+                lobby = lobbies.get(lobby_id)
+                if lobby and "states" in lobby:
+                    other_states = {k: v for k, v in lobby["states"].items() if k != pid}
+                    resp = {"states": other_states}
+                else:
+                    resp = {"states": {}}
             conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
 
         elif t == "heartbeat":

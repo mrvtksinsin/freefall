@@ -71,6 +71,15 @@ class Game:
         self.online_mgr = OnlineManager(self.save) if OnlineManager else None
         self.vs_race_timer = 0.0
         self.vs_result = None
+        # Lobby / Invite
+        self.lobby_id = None
+        self.lobby_players = []
+        self.lobby_ready = {}
+        self.pending_invite = None
+        self.invite_sent = None  # to_id
+        self._poll_timer = 0.0
+        self._vs_sync_timer = 0.0
+        self._lobby_gone_count = 0
 
         # ilk açılışta sadece Nickname yoksa profil ekranına zorla — ID server'da ONLINE'da oluşur
         import save_system as _ss
@@ -344,6 +353,49 @@ class Game:
                 try: audio.stop_izmir_marsi()
                 except: pass
 
+        # Online invite/lobby polling — throttled (0.2s) her durumda davet gelebilir
+        self._poll_timer += dt
+        if self._poll_timer >= 0.20:
+            self._poll_timer = 0.0
+            if self.online_mgr:
+                try:
+                    inv = self.online_mgr.poll_invite()
+                    if inv and not self.pending_invite:
+                        self.pending_invite = inv
+                        audio.play("levelup")
+                    # lobby güncellemeleri
+                    lob = self.online_mgr.poll_lobby()
+                    if lob:
+                        self.lobby_id = lob.get("lobby_id")
+                        self.lobby_players = lob.get("players", [])
+                        self.lobby_ready = lob.get("ready", {})
+                        if self.state not in ("lobby", "vs_online"):
+                            if self.lobby_id:
+                                self.state = "lobby"
+                        self._lobby_gone_count = 0
+                    else:
+                        if self.state == "lobby" and self.lobby_id:
+                            # üst üste 2 kez None gelirse kapat
+                            cnt = getattr(self, "_lobby_gone_count", 0) + 1
+                            self._lobby_gone_count = cnt
+                            if cnt >= 2:
+                                self.lobby_id = None
+                                self.lobby_players = []
+                                self.lobby_ready = {}
+                                self.state = "online_menu"
+                                self.online_error = "Oyuncu lobiden ayrıldı."
+                                self._lobby_gone_count = 0
+                        else:
+                            self._lobby_gone_count = 0
+                    # game_start — lob.id ile tek bağlantı
+                    if self.lobby_id:
+                        gid = self.online_mgr.poll_game_start(self.lobby_id)
+                        if gid:
+                            self.lobby_id = gid
+                            self.start_multiplayer_game(gid)
+                except:
+                    pass
+
         # Bölüm tamamlama / final ekranları — input bekle, timer ilerlet
         if self.state == "level_complete":
             self.level_complete_timer += dt
@@ -432,6 +484,20 @@ class Game:
                     # 4m sonra tutorial bitti say
                     self.save["tutorial_done"] = True
                     save_system.save_game(self.save)
+        # Lobby — sadece bekleme, ready durumu polling ile güncelleniyor
+        if self.state == "lobby":
+            # bağlantı kopması kontrolü
+            if self.online_mgr and not self.online_mgr.is_online():
+                # kısa süreli kopma tolere et, ama uzun süre offline ise hata göster
+                pass
+            # eğer lobby kapandıysa (diğer oyuncu ayrıldı)
+            if self.lobby_id and not self.lobby_players:
+                # polling'de lobby None oldu
+                self.state = "online_menu"
+                self.lobby_id = None
+                self.online_error = "Oyuncu lobiden ayrıldı."
+            return
+
         # VS modları — BOT / ONLINE yarış
         if self.state in ("vs_bot","vs_online"):
             if self.paused:
@@ -447,11 +513,11 @@ class Game:
             self.world.update_coins(dt)
             evt = self.player.update_physics(dt, self.world.obstacles)
             if evt=="land":
-                self.particles.emit_land(self.player.x+self.w//2, self.player.y+self.h)
+                self.particles.emit_land(self.player.x+self.player.w//2, self.player.y+self.player.h)
                 audio.play("jump",0.5)
             elif evt=="death":
                 audio.play("death")
-                self.particles.emit_death(self.player.x+self.w//2, self.player.y+self.h//2)
+                self.particles.emit_death(self.player.x+self.player.w//2, self.player.y+self.player.h//2)
             # bot physics
             bot_evt=None
             if self.state=="vs_bot" and self.vs_bot:
@@ -461,20 +527,29 @@ class Game:
                     if not c.collected and self.vs_bot.rect.colliderect(c.rect()):
                         c.collected=True
                         self.vs_bot.coins+=c.value
-            # online remote state güncelle
-            if self.state=="vs_online" and self.online_mgr:
-                try:
-                    remote=self.online_mgr.get_remote_state()
-                    if remote:
-                        self.vs_remote=remote
-                except:
-                    self.vs_remote=None
-                # bağlantı kopma simülasyonu: eğer 5sn'de hiç veri yoksa uyarı
+            # online multiplayer sync — throttled (0.08s) to avoid flooding
+            if self.state=="vs_online" and self.online_mgr and self.lobby_id:
+                self._vs_sync_timer += dt
+                if self._vs_sync_timer >= 0.08:
+                    self._vs_sync_timer = 0.0
+                    try:
+                        my_state = {"x": self.player.x, "y": self.player.y, "vx": self.player.vx, "vy": self.player.vy, "state": self.player.state, "alive": self.player.alive, "coins": self.player.coins, "char": self.save.get("selected_character")}
+                        self.online_mgr.send_player_state(self.lobby_id, my_state)
+                    except: pass
+                    try:
+                        remotes = self.online_mgr.poll_remote_states(self.lobby_id)
+                        for pid, st in remotes.items():
+                            if pid != str(self.save.get("player_id")):
+                                self.vs_remote = st
+                                self.vs_opponent_id = pid
+                                break
+                    except:
+                        self.vs_remote = None
             gained=self.world.check_coin_collection(self.player.rect)
             if gained:
                 self.save["total_coins"]+=gained
                 self.player.coins+=gained
-                self.particles.emit_coin(self.player.x+self.w//2, self.player.y+self.h//2, gained)
+                self.particles.emit_coin(self.player.x+self.player.w//2, self.player.y+self.player.h//2, gained)
                 audio.play("coin5" if gained>=5 else "coin")
             self.camera.update(dt, self.player.y, self.player.alive)
             # monster her ikisini de tehdit etsin (ortadaki)
@@ -489,7 +564,7 @@ class Game:
                 if self.monster.check_catch(self.player) and self.player.alive:
                     self.player.alive=False; self.player.state="death"
                     audio.play("death")
-                    self.particles.emit_death(self.player.x+self.w//2, self.player.y+self.h//2)
+                    self.particles.emit_death(self.player.x+self.player.w//2, self.player.y+self.player.h//2)
             except: pass
             if not self.player.alive:
                 self.death_timer+=dt
@@ -611,8 +686,15 @@ class Game:
                 self.handle_play_select_keys(event)
             elif self.state == "online_menu":
                 self.handle_online_keys(event)
+            elif self.state == "lobby":
+                self.handle_lobby_keys(event)
             elif self.state in ("vs_bot", "vs_online"):
                 self.handle_vs_keys(event)
+
+            # davet popup her durumda (online_menu/lobby/menu) çalışır
+            if self.pending_invite and event.key in (pygame.K_y, pygame.K_RETURN):
+                # Y ile kabul, ESC ile reddet zaten handle edilecek
+                pass
 
         elif event.type == pygame.MOUSEBUTTONDOWN and event.pos:
             self.handle_mouse(event.pos)
@@ -989,14 +1071,28 @@ class Game:
                 self.state = "menu"
 
     def handle_online_keys(self, event):
+        # davet popup varsa önce onu işle
+        if self.pending_invite:
+            if event.key == pygame.K_ESCAPE:
+                self.reject_invite()
+                return
+            elif event.key in (pygame.K_RETURN, pygame.K_SPACE, pygame.K_y):
+                self.accept_invite()
+                return
+            elif event.key == pygame.K_n:
+                self.reject_invite()
+                return
         if event.key == pygame.K_ESCAPE:
             self.state = "play_select"; self.online_error=""; return
         if event.key == pygame.K_BACKSPACE:
             self.online_input = self.online_input[:-1]
             self.online_error=""
         elif event.key == pygame.K_RETURN or event.key == pygame.K_KP_ENTER:
-            # ara
-            self._online_search()
+            # ara — eğer oyuncu bulunduysa davet et, yoksa ara
+            if self.online_info and self.online_input.strip() == str(self.online_info.get("id") or self.online_info.get("player_id","")):
+                self.send_invite()
+            else:
+                self._online_search()
         else:
             ch = getattr(event,'unicode','')
             if ch and ch.isdigit() and len(self.online_input) < 5:
@@ -1008,6 +1104,15 @@ class Game:
         if self.online_info and event.key in (pygame.K_RETURN, pygame.K_SPACE) and len(self.online_input)==5:
             # zaten _online_search içinde maç başlatma ayrı buton, burada ek shortcut
             pass
+
+    def handle_lobby_keys(self, event):
+        if event.key == pygame.K_ESCAPE:
+            self.leave_lobby()
+            return
+        if event.key in (pygame.K_RETURN, pygame.K_SPACE):
+            self.toggle_ready()
+        elif event.key == pygame.K_q:
+            self.leave_lobby()
 
     def _online_search(self):
         tid = self.online_input.strip()
@@ -1103,6 +1208,102 @@ class Game:
         self.level_info=config.LEVELS[0]
         self.monster=Monster()
         self.monster.reset(self.player.y, 1, "HAVA")
+        audio.play("levelup")
+
+    # Yeni: davet/lobby akışı
+    def send_invite(self):
+        if not self.online_info:
+            self.online_error = "Önce oyuncu bulun"
+            return
+        to_id = str(self.online_info.get("id") or self.online_info.get("player_id","")).strip()
+        if not to_id:
+            self.online_error = "Geçersiz ID"
+            return
+        if self.online_mgr:
+            ok, msg = self.online_mgr.send_invite(to_id)
+            if ok:
+                self.invite_sent = to_id
+                self.online_error = f"Davet gönderildi: {to_id}"
+                audio.play("click")
+            else:
+                self.online_error = msg
+                audio.play("death",0.4)
+
+    def accept_invite(self):
+        if not self.pending_invite:
+            return
+        from_id = self.pending_invite.get("from_id")
+        if self.online_mgr:
+            ok, msg = self.online_mgr.accept_invite(from_id)
+            if ok:
+                self.pending_invite = None
+                audio.play("levelup")
+            else:
+                self.online_error = msg
+
+    def reject_invite(self):
+        if not self.pending_invite:
+            return
+        from_id = self.pending_invite.get("from_id")
+        if self.online_mgr:
+            self.online_mgr.reject_invite(from_id)
+        self.pending_invite = None
+        audio.play("click")
+
+    def toggle_ready(self):
+        if not self.lobby_id or not self.online_mgr:
+            return
+        # kendi ready durumunu toggle
+        cur = self.lobby_ready.get(str(self.save.get("player_id")), False)
+        new = not cur
+        self.online_mgr.send_ready(self.lobby_id, new)
+        # local optimistic
+        self.lobby_ready[str(self.save.get("player_id"))] = new
+        audio.play("click")
+
+    def leave_lobby(self):
+        if self.lobby_id and self.online_mgr:
+            self.online_mgr.leave_lobby(self.lobby_id)
+        self.lobby_id = None
+        self.lobby_players = []
+        self.lobby_ready = {}
+        self.state = "online_menu"
+        audio.play("click")
+
+    def start_multiplayer_game(self, lobby_id):
+        # Gerçek multiplayer oyun — lobby hazır
+        self.lobby_id = lobby_id
+        self.state = "vs_online"
+        self.vs_mode = "online"
+        self.vs_race_timer = 0.0
+        self.vs_result = None
+        self.death_timer = 0.0
+        self.paused = False
+        # rakip bilgisi
+        other = None
+        for pid in self.lobby_players:
+            if pid != str(self.save.get("player_id")):
+                other = pid
+                break
+        if other:
+            self.vs_opponent_id = other
+            # nick bul
+            if self.online_info and str(self.online_info.get("id")) == other:
+                self.vs_opponent_nick = self.online_info.get("nick") or self.online_info.get("nickname")
+            else:
+                self.vs_opponent_nick = other
+        else:
+            self.vs_opponent_id = self.online_info.get("id") if self.online_info else "Rakip"
+            self.vs_opponent_nick = self.online_info.get("nick") if self.online_info else "Rakip"
+        self.player.reset(config.SCREEN_WIDTH//2 - config.PLAYER_W//2, 80)
+        self.camera.reset(self.player.y)
+        self.world.reset()
+        self.particles = ParticleSystem()
+        self.level = 1
+        self.level_info = config.LEVELS[0]
+        self.monster = Monster()
+        self.monster.reset(self.player.y, 1, "HAVA")
+        self.vs_remote = None
         audio.play("levelup")
 
     def handle_vs_keys(self, event):
@@ -1316,6 +1517,16 @@ class Game:
                         audio.play("click")
                     break
         elif self.state=="online_menu":
+            # davet popup öncelikli
+            if self.pending_invite:
+                box = pygame.Rect(config.SCREEN_WIDTH//2-180, config.SCREEN_HEIGHT//2-60, 360, 120)
+                b_yes = pygame.Rect(box.x+20, box.y+70, 150, 36)
+                b_no = pygame.Rect(box.x+190, box.y+70, 150, 36)
+                if b_yes.collidepoint(mx,my):
+                    self.accept_invite()
+                elif b_no.collidepoint(mx,my):
+                    self.reject_invite()
+                return
             box = pygame.Rect(config.SCREEN_WIDTH//2-260, 106, 520, 306)
             btn = pygame.Rect(box.x+24, box.y+118, box.width-48, 42)
             if btn.collidepoint(mx,my):
@@ -1323,8 +1534,25 @@ class Game:
             if self.online_info:
                 mbtn = pygame.Rect(box.x+24, box.bottom-48, box.width-48, 36)
                 if mbtn.collidepoint(mx,my):
-                    self.start_vs_online()
-            # geri — ESC ile de, ama ekstra tıklama: üst bar
+                    self.send_invite()
+        elif self.state=="lobby":
+            # HAZIR ve AYRIL butonları
+            box = pygame.Rect(config.SCREEN_WIDTH//2-240, config.SCREEN_HEIGHT//2-110, 480, 260)
+            b_ready = pygame.Rect(box.x+30, box.y+180, 190, 42)
+            b_leave = pygame.Rect(box.x+260, box.y+180, 190, 42)
+            if b_ready.collidepoint(mx,my):
+                self.toggle_ready()
+            elif b_leave.collidepoint(mx,my):
+                self.leave_lobby()
+            # davet popup da burada
+            if self.pending_invite:
+                box2 = pygame.Rect(config.SCREEN_WIDTH//2-180, config.SCREEN_HEIGHT//2-60, 360, 120)
+                b_yes = pygame.Rect(box2.x+20, box2.y+70, 150, 36)
+                b_no = pygame.Rect(box2.x+190, box2.y+70, 150, 36)
+                if b_yes.collidepoint(mx,my):
+                    self.accept_invite()
+                elif b_no.collidepoint(mx,my):
+                    self.reject_invite()
         elif self.state in ("vs_bot","vs_online"):
             # ESC ile menü — click boş
             pass
@@ -1463,6 +1691,11 @@ class Game:
                 self.draw_vs_hud(surf, theme)
                 if self.paused:
                     self.draw_pause(surf, theme)
+            elif self.state == "lobby":
+                self.draw_lobby(surf, theme)
+            # davet popup her durumda (lobby hariç üstte)
+            if self.pending_invite and self.state != "lobby":
+                self.draw_invite_popup(surf, theme)
         except Exception as e:
             print(f"[Draw error] {e}")
             surf.fill((20,20,20))
@@ -2501,13 +2734,17 @@ class Game:
             surf.blit(t3, (card.x+54, card.y+10))
             t4 = self.font_small.render(f"ID: {pid}", True, (255,238,130))
             surf.blit(t4, (card.x+54, card.y+30))
-            # MAÇ BAŞLAT
+            # DAVET ET
             mbtn = pygame.Rect(box.x+24, box.bottom-48, box.width-48, 36)
             hover2 = mbtn.collidepoint(mx,my)
-            pygame.draw.rect(surf, (0,160,80) if hover2 else (0,136,68), mbtn, border_radius=9)
+            # davet gönderildiyse farklı renk
+            is_sent = self.invite_sent == pid
+            col_inv = (80,160,255) if is_sent else (0,160,80) if hover2 else (0,136,68)
+            pygame.draw.rect(surf, col_inv, mbtn, border_radius=9)
             pygame.draw.rect(surf, (0,0,0), mbtn, width=2, border_radius=9)
             if hover2: pygame.draw.rect(surf, (255,215,0), mbtn, width=2, border_radius=9)
-            t5 = self.font_med.render("MAÇ BAŞLAT", True, (255,255,255))
+            txt_inv = "DAVET GÖNDERİLDİ" if is_sent else "DAVET ET"
+            t5 = self.font_med.render(txt_inv, True, (255,255,255))
             surf.blit(t5, (mbtn.centerx - t5.get_width()//2, mbtn.centery - t5.get_height()//2))
         hint2 = self.font_tiny.render("ESC Geri  •  Sadece rakam gir (5 hane)", True, theme["hud"])
         surf.blit(hint2, (config.SCREEN_WIDTH//2 - hint2.get_width()//2, box.bottom+14))
@@ -2544,4 +2781,93 @@ class Game:
         if self.state=="vs_online" and not self.vs_remote:
             warn = self.font_small.render("Bağlantı bekleniyor...", True, (255,220,100))
             surf.blit(warn, (config.SCREEN_WIDTH//2 - warn.get_width()//2, hud_y+34))
+
+    def draw_lobby(self, surf, theme):
+        gfx.vertical_gradient(surf, tuple(min(255,c+18) for c in theme["bg"]), tuple(max(0,c-14) for c in theme["bg"]))
+        gfx.draw_vignette(surf, intensity=0.16)
+        title = self.font_big.render("LOBİ", True, theme["hud"])
+        surf.blit(title, (config.SCREEN_WIDTH//2 - title.get_width()//2, 24))
+        hint = self.font_small.render("Hazır olunca oyun başlayacak", True, theme["hud"])
+        surf.blit(hint, (config.SCREEN_WIDTH//2 - hint.get_width()//2, 56))
+        box = pygame.Rect(config.SCREEN_WIDTH//2-240, 92, 480, 260)
+        gfx.draw_soft_shadow(surf, box, radius=16, alpha=42)
+        gfx.glass_panel(surf, box, fill=(255,255,255,242), border=(0,0,0,110), radius=14)
+        # oyuncular
+        y = box.y + 20
+        for idx, pid in enumerate(self.lobby_players or []):
+            is_me = pid == str(self.save.get("player_id"))
+            nick = self.save.get("nickname") if is_me else (self.vs_opponent_nick or self.online_info.get("nick") if self.online_info else pid)
+            # nick resolve
+            if not is_me and self.online_info and str(self.online_info.get("id"))==pid:
+                nick = self.online_info.get("nick")
+            elif not is_me and self.pending_invite and self.pending_invite.get("from_id")==pid:
+                nick = self.pending_invite.get("from_nick")
+            ready = self.lobby_ready.get(pid, False)
+            card = pygame.Rect(box.x+20, y + idx*70, box.width-40, 56)
+            col = (60,160,80) if ready else (220,220,220)
+            pygame.draw.rect(surf, col, card, border_radius=10)
+            pygame.draw.rect(surf, (0,0,0), card, width=2, border_radius=10)
+            if ready:
+                pygame.draw.rect(surf, (255,215,0), card, width=3, border_radius=10)
+            name = self.font_med.render(f"{nick} {'(SEN)' if is_me else ''}", True, (0,0,0))
+            surf.blit(name, (card.x+16, card.y+10))
+            idt = self.font_small.render(f"ID: {pid}", True, (60,60,60))
+            surf.blit(idt, (card.x+16, card.y+30))
+            status = self.font_small.render("HAZIR" if ready else "HAZIR DEĞİL", True, (0,120,40) if ready else (160,40,40))
+            surf.blit(status, (card.right - status.get_width() -16, card.centery - status.get_height()//2))
+        # hazır butonu
+        mx,my = pygame.mouse.get_pos()
+        b_ready = pygame.Rect(box.x+30, box.y+180, 190, 42)
+        hover = b_ready.collidepoint(mx,my)
+        my_ready = self.lobby_ready.get(str(self.save.get("player_id")), False)
+        col = (0,160,80) if not my_ready else (200,60,60)
+        top = (80,220,120) if not my_ready else (255,120,120)
+        btn_s = pygame.Surface((b_ready.width, b_ready.height), pygame.SRCALPHA)
+        for yy in range(b_ready.height):
+            ts=yy/b_ready.height
+            rr=int(top[0]*(1-ts)+col[0]*ts); gg=int(top[1]*(1-ts)+col[1]*ts); bb=int(top[2]*(1-ts)+col[2]*ts)
+            pygame.draw.line(btn_s,(rr,gg,bb),(0,yy),(b_ready.width,yy))
+        mask = pygame.Surface((b_ready.width,b_ready.height), pygame.SRCALPHA)
+        pygame.draw.rect(mask,(255,255,255),(0,0,b_ready.width,b_ready.height), border_radius=10)
+        btn_s.blit(mask,(0,0), special_flags=pygame.BLEND_RGBA_MULT)
+        surf.blit(btn_s, b_ready.topleft)
+        pygame.draw.rect(surf, (0,0,0), b_ready, width=2, border_radius=10)
+        if hover: pygame.draw.rect(surf, (255,215,0), b_ready, width=2, border_radius=10)
+        txt = self.font_med.render("HAZIR DEĞİL" if not my_ready else "HAZIR", True, (255,255,255))
+        surf.blit(txt, (b_ready.centerx - txt.get_width()//2, b_ready.centery - txt.get_height()//2))
+        # ayrıl
+        b_leave = pygame.Rect(box.x+260, box.y+180, 190, 42)
+        hover2 = b_leave.collidepoint(mx,my)
+        pygame.draw.rect(surf, (200,40,40) if hover2 else (120,30,30), b_leave, border_radius=10)
+        pygame.draw.rect(surf, (0,0,0), b_leave, width=2, border_radius=10)
+        t2 = self.font_med.render("LOBİDEN AYRIL", True, (255,255,255))
+        surf.blit(t2, (b_leave.centerx - t2.get_width()//2, b_leave.centery - t2.get_height()//2))
+        # bilgi
+        info = self.font_tiny.render("İki oyuncu hazır olunca oyun başlar", True, theme["hud"])
+        surf.blit(info, (box.centerx - info.get_width()//2, box.bottom+14))
+
+    def draw_invite_popup(self, surf, theme):
+        # yarı saydam overlay
+        over = pygame.Surface((config.SCREEN_WIDTH, config.SCREEN_HEIGHT), pygame.SRCALPHA)
+        over.fill((0,0,0,120))
+        surf.blit(over, (0,0))
+        box = pygame.Rect(config.SCREEN_WIDTH//2-180, config.SCREEN_HEIGHT//2-60, 360, 120)
+        gfx.draw_soft_shadow(surf, box, radius=16, alpha=48)
+        gfx.glass_panel(surf, box, fill=(255,255,255,242), border=(0,0,0,110), radius=12)
+        from_nick = self.pending_invite.get("from_nick","?")
+        from_id = self.pending_invite.get("from_id","?????")
+        txt1 = self.font_med.render(f"{from_nick} ({from_id})", True, (0,0,0))
+        surf.blit(txt1, (box.centerx - txt1.get_width()//2, box.y+18))
+        txt2 = self.font_small.render("seni oyuna davet ediyor.", True, (60,60,60))
+        surf.blit(txt2, (box.centerx - txt2.get_width()//2, box.y+44))
+        mx,my = pygame.mouse.get_pos()
+        b_yes = pygame.Rect(box.x+20, box.y+70, 150, 36)
+        b_no = pygame.Rect(box.x+190, box.y+70, 150, 36)
+        for b, label, col in [(b_yes,"KABUL ET",(0,160,80)), (b_no,"REDDET",(200,40,40))]:
+            hover = b.collidepoint(mx,my)
+            pygame.draw.rect(surf, col if not hover else tuple(min(255,c+20) for c in col), b, border_radius=8)
+            pygame.draw.rect(surf, (0,0,0), b, width=2, border_radius=8)
+            if hover: pygame.draw.rect(surf, (255,215,0), b, width=2, border_radius=8)
+            t = self.font_med.render(label, True, (255,255,255))
+            surf.blit(t, (b.centerx - t.get_width()//2, b.centery - t.get_height()//2))
 
