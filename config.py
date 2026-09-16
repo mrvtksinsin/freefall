@@ -46,6 +46,9 @@ SAFE_START_DISTANCE = 600    # başlangıçta engelsiz alan (px)
 WORLD_GEN_AHEAD = 3000       # kamera önünde bu kadar üret
 WORLD_CLEAN_BEHIND = 1500    # kamera arkasında bu kadar sonra sil
 
+# VS Bot yarışı — bitiş çizgisi mesafesi (px, ~160m, 70-90sn)
+VS_BOT_FINISH_DISTANCE = 16000
+
 # Mesafe
 PIXELS_PER_METER = 100.0
 

@@ -71,6 +71,8 @@ class Game:
         self.online_mgr = OnlineManager(self.save) if OnlineManager else None
         self.vs_race_timer = 0.0
         self.vs_result = None
+        self.vs_finish_y = None  # vs_bot bitiş çizgisi world Y
+        self.vs_finish_timer = 0.0
         # Lobby / Invite
         self.lobby_id = None
         self.lobby_players = []
@@ -153,6 +155,11 @@ class Game:
         self.ending_anim = 0.0
         self.ending_timer = 0.0
         self.level_complete_timer = 0.0
+        self.vs_mode = None
+        self.vs_bot = None
+        self.vs_finish_y = None
+        self.vs_result = None
+        self.vs_finish_timer = 0.0
         try:
             audio.stop_izmir_marsi()
         except: pass
@@ -240,6 +247,8 @@ class Game:
         self.ending_anim = 0.0
         self.level_up_anim = 0
         self.just_unlocked = None
+        self.vs_finish_y = None
+        self.vs_result = None
         self.update_level(force=True)
 
     def get_level_target_px(self, lvl):
@@ -278,6 +287,8 @@ class Game:
         self.ending_timer = 0.0
         self.level_up_anim = 0
         self.just_unlocked = None
+        self.vs_finish_y = None
+        self.vs_result = None
         # save'te unlocked zaten var, ama garanti et
         if lvl not in self.save.get("unlocked_levels", []):
             self.save["unlocked_levels"].append(lvl)
@@ -510,6 +521,14 @@ class Game:
                 self.online_error = "Oyuncu lobiden ayrıldı."
             return
 
+        # vs_result — KAZANDIN/KAYBETTİN ekranı bekleme
+        if self.state == "vs_result":
+            self.vs_finish_timer += dt
+            self.particles.update(dt, self.camera.y, self.level_info["name"])
+            if self.level_up_anim > 0:
+                self.level_up_anim -= dt
+            return
+
         # VS modları — BOT / ONLINE yarış
         if self.state in ("vs_bot","vs_online"):
             if self.paused:
@@ -581,6 +600,31 @@ class Game:
                     audio.play("death")
                     self.particles.emit_death(self.player.x+self.player.w//2, self.player.y+self.player.h//2)
             except: pass
+            # --- BİTİŞ ÇİZGİSİ — vs_bot ---
+            if self.state == "vs_bot" and self.vs_finish_y is not None and self.vs_result is None:
+                player_finished = self.player.alive and self.player.y >= self.vs_finish_y
+                bot_finished = self.vs_bot and self.vs_bot.alive and self.vs_bot.y >= self.vs_finish_y
+                if player_finished or bot_finished:
+                    if player_finished and bot_finished:
+                        # beraber çizgiyi geçti — daha ileride olan kazanır
+                        self.vs_result = "win" if self.player.y >= self.vs_bot.y else "lose"
+                    elif player_finished:
+                        self.vs_result = "win"
+                    else:
+                        self.vs_result = "lose"
+                    self.state = "vs_result"
+                    self.vs_finish_timer = 0.0
+                    self.paused = False
+                    try:
+                        if self.vs_result == "win":
+                            audio.play("levelup")
+                            self.particles.emit_levelup(self.player.x + self.player.w//2, self.player.y)
+                        else:
+                            audio.play("death", 0.6)
+                    except: pass
+                    save_system.save_game(self.save)
+                    # döngüyü durdur — vs_result ekranı update'de bekleyecek
+                    return
             if not self.player.alive:
                 self.death_timer+=dt
                 if self.death_timer>1.2:
@@ -705,6 +749,8 @@ class Game:
                 self.handle_lobby_keys(event)
             elif self.state in ("vs_bot", "vs_online"):
                 self.handle_vs_keys(event)
+            elif self.state == "vs_result":
+                self.handle_vs_result_keys(event)
 
             # davet popup her durumda (online_menu/lobby/menu) çalışır
             if self.pending_invite and event.key in (pygame.K_y, pygame.K_RETURN):
@@ -1179,6 +1225,8 @@ class Game:
         self.level_start_y=self.player.y
         self.vs_race_timer=0.0
         self.vs_result=None
+        self.vs_finish_y = self.player.y + config.VS_BOT_FINISH_DISTANCE
+        self.vs_finish_timer = 0.0
         self.level = 1
         self.level_info=config.LEVELS[0]
         if BotPlayer:
@@ -1330,9 +1378,23 @@ class Game:
             self.state="play_select"
             self.vs_mode=None
             self.vs_bot=None
+            self.vs_finish_y=None
             audio.play("click")
         elif event.key==pygame.K_SPACE:
             self.paused= not self.paused
+
+    def handle_vs_result_keys(self, event):
+        if event.key in (pygame.K_RETURN, pygame.K_SPACE, pygame.K_r):
+            # tekrar — aynı BOT yarışı
+            self.start_vs_bot()
+            audio.play("click")
+        elif event.key in (pygame.K_ESCAPE, pygame.K_m, pygame.K_q):
+            self.state = "play_select"
+            self.vs_mode = None
+            self.vs_bot = None
+            self.vs_finish_y = None
+            self.vs_result = None
+            audio.play("click")
 
     def handle_mouse(self, pos):
         mx,my = pos
@@ -1571,6 +1633,21 @@ class Game:
         elif self.state in ("vs_bot","vs_online"):
             # ESC ile menü — click boş
             pass
+        elif self.state == "vs_result":
+            # draw_vs_result: box 440x260, b1 x+30 y+190 190x44, b2 x+230 y+190 190x44
+            box = pygame.Rect(config.SCREEN_WIDTH//2-220, config.SCREEN_HEIGHT//2-110, 440, 220)
+            b1 = pygame.Rect(box.x+30, box.y+150, 190, 44)
+            b2 = pygame.Rect(box.x+220, box.y+150, 190, 44)
+            if b1.collidepoint(mx,my):
+                self.start_vs_bot()
+                audio.play("click")
+            elif b2.collidepoint(mx,my):
+                self.state = "play_select"
+                self.vs_mode = None
+                self.vs_bot = None
+                self.vs_finish_y = None
+                self.vs_result = None
+                audio.play("click")
 
     def handle_mouse_hover(self, pos):
         mx,my = pos
@@ -1675,8 +1752,13 @@ class Game:
             elif self.state=="online_menu":
                 self.draw_online(surf, theme)
             elif self.state in ("vs_bot","vs_online"):
-                # VS yarış — aynı dünya + rakip
+                # VS yarış — aynı dünya + rakip + bitiş çizgisi
                 self.world.draw(surf, self.camera.y, self.level_info)
+                # bitiş çizgisi — vs_bot için görünür
+                if self.state == "vs_bot" and getattr(self, "vs_finish_y", None) is not None:
+                    try:
+                        self.draw_vs_finish_line(surf, theme)
+                    except: pass
                 if hasattr(self, 'monster'):
                     try: self.monster.draw(surf, self.camera.y)
                     except: pass
@@ -1689,10 +1771,8 @@ class Game:
                     except: pass
                 elif self.state=="vs_online" and self.vs_remote:
                     try:
-                        # remote ghost — basit rect
                         rx = int(self.vs_remote.get("x", self.player.x+30))
                         ry = int(self.vs_remote.get("y", self.player.y) - self.camera.y)
-                        # ghost card
                         ghost_rect = pygame.Rect(rx, ry, self.player.w, self.player.h)
                         gfx.draw_glow(surf, ghost_rect.center, 18, (90,140,255), 22)
                         pygame.draw.rect(surf, (90,140,255), ghost_rect, border_radius=8)
@@ -1706,6 +1786,26 @@ class Game:
                 self.draw_vs_hud(surf, theme)
                 if self.paused:
                     self.draw_pause(surf, theme)
+            elif self.state == "vs_result":
+                # vs_result arka plan: donmuş yarış + sonuç overlay
+                self.world.draw(surf, self.camera.y, self.level_info)
+                if self.state == "vs_result" and getattr(self, "vs_finish_y", None) is not None:
+                    try:
+                        self.draw_vs_finish_line(surf, theme)
+                    except: pass
+                if hasattr(self, 'monster'):
+                    try: self.monster.draw(surf, self.camera.y)
+                    except: pass
+                self.particles.draw(surf, self.camera.y)
+                if self.vs_bot:
+                    try:
+                        bot_char = getattr(self, 'vs_bot_char', self.get_char_data())
+                        self.vs_bot.draw(surf, self.camera.y, bot_char, self.get_equipped(), theme)
+                    except: pass
+                self.player.draw(surf, self.camera.y, self.get_char_data(), self.get_equipped(), theme)
+                self.draw_hud(surf, theme)
+                self.draw_vs_hud(surf, theme)
+                self.draw_vs_result(surf, theme)
             elif self.state == "lobby":
                 self.draw_lobby(surf, theme)
             # davet popup her durumda (lobby hariç üstte)
@@ -2796,6 +2896,83 @@ class Game:
         if self.state=="vs_online" and not self.vs_remote:
             warn = self.font_small.render("Bağlantı bekleniyor...", True, (255,220,100))
             surf.blit(warn, (config.SCREEN_WIDTH//2 - warn.get_width()//2, hud_y+34))
+
+    def draw_vs_finish_line(self, surf, theme):
+        if self.vs_finish_y is None:
+            return
+        fy = int(self.vs_finish_y - self.camera.y)
+        if fy < -40 or fy > config.SCREEN_HEIGHT + 40:
+            return
+        # görünür bitiş çizgisi — duvardan duvara dama + ışık
+        rect = pygame.Rect(config.WALL_THICKNESS, fy - 8, config.SCREEN_WIDTH - 2*config.WALL_THICKNESS, 16)
+        gfx.draw_glow(surf, rect.center, 28, (255,215,0), 24)
+        # dama deseni
+        cell = 22
+        for x in range(rect.x, rect.right, cell):
+            col = (255,255,255) if ((x - rect.x)//cell) % 2 == 0 else (0,0,0)
+            sub = pygame.Rect(x, rect.y, min(cell, rect.right - x), rect.height)
+            pygame.draw.rect(surf, col, sub)
+        pygame.draw.rect(surf, (255,215,0), rect, width=3)
+        pygame.draw.rect(surf, (0,0,0), rect, width=1)
+        # BITIS etiketi
+        label = self.font_med.render("BİTİŞ", True, (0,0,0))
+        bg = pygame.Rect(rect.centerx - label.get_width()//2 - 10, rect.y - 20, label.get_width()+20, 18)
+        pygame.draw.rect(surf, (255,215,0), bg, border_radius=6)
+        pygame.draw.rect(surf, (0,0,0), bg, width=2, border_radius=6)
+        surf.blit(label, (bg.centerx - label.get_width()//2, bg.centery - label.get_height()//2))
+        # mesafe kalan göstergesi üstte
+        if self.state in ("vs_bot","vs_online"):
+            remain = max(0, (self.vs_finish_y - self.player.y) / config.PIXELS_PER_METER)
+            txt = self.font_tiny.render(f"Bitişe {remain:.0f} m", True, (255,255,200))
+            surf.blit(txt, (rect.centerx - txt.get_width()//2, rect.bottom + 4))
+
+    def draw_vs_result(self, surf, theme):
+        # yarı saydam overlay
+        over = pygame.Surface((config.SCREEN_WIDTH, config.SCREEN_HEIGHT), pygame.SRCALPHA)
+        over.fill((0,0,0,118))
+        surf.blit(over, (0,0))
+        box = pygame.Rect(config.SCREEN_WIDTH//2-220, config.SCREEN_HEIGHT//2-110, 440, 220)
+        gfx.draw_soft_shadow(surf, box, radius=16, alpha=48)
+        gfx.glass_panel(surf, box, fill=(255,255,255,242), border=(0,0,0,110), radius=14)
+        is_win = self.vs_result == "win"
+        title = "KAZANDIN!" if is_win else "KAYBETTİN!"
+        col = (40,160,60) if is_win else (200,40,40)
+        tcol = (255,215,0) if is_win else (255,220,220)
+        title_surf = self.font_huge.render(title, True, tcol)
+        # glow
+        gfx.draw_glow(surf, box.center, 46, col, 26)
+        surf.blit(title_surf, (box.centerx - title_surf.get_width()//2, box.y+22))
+        # süre ve mesafe
+        time_txt = self.font_small.render(f"Süre: {self.vs_race_timer:.1f} sn", True, (60,60,60))
+        surf.blit(time_txt, (box.centerx - time_txt.get_width()//2, box.y+78))
+        my_m = self.player.distance_px / config.PIXELS_PER_METER
+        dist_txt = self.font_small.render(f"Mesafe: {my_m:.1f} m", True, (60,60,60))
+        surf.blit(dist_txt, (box.centerx - dist_txt.get_width()//2, box.y+100))
+        # butonlar
+        mx,my = pygame.mouse.get_pos()
+        b1 = pygame.Rect(box.x+30, box.y+150, 190, 44)
+        b2 = pygame.Rect(box.x+220, box.y+150, 190, 44)
+        for b, label in [(b1, "TEKRAR OYNA"), (b2, "MENÜ")]:
+            hover = b.collidepoint(mx,my)
+            c = (0,160,80) if b==b1 else (60,60,70)
+            top = (80,220,120) if b==b1 else (90,90,96)
+            if hover:
+                c = tuple(min(255, x+18) for x in c)
+                top = tuple(min(255, x+18) for x in top)
+            btn_s = pygame.Surface((b.width, b.height), pygame.SRCALPHA)
+            for yy in range(b.height):
+                ts=yy/b.height
+                rr=int(top[0]*(1-ts)+c[0]*ts); gg=int(top[1]*(1-ts)+c[1]*ts); bb=int(top[2]*(1-ts)+c[2]*ts)
+                pygame.draw.line(btn_s,(rr,gg,bb),(0,yy),(b.width,yy))
+            mask = pygame.Surface((b.width,b.height), pygame.SRCALPHA)
+            pygame.draw.rect(mask,(255,255,255),(0,0,b.width,b.height), border_radius=10)
+            btn_s.blit(mask,(0,0), special_flags=pygame.BLEND_RGBA_MULT)
+            surf.blit(btn_s, b.topleft)
+            pygame.draw.rect(surf, (255,215,0) if hover else (0,0,0), b, width=2, border_radius=10)
+            txt = self.font_med.render(label, True, (255,255,255))
+            surf.blit(txt, (b.centerx - txt.get_width()//2, b.centery - txt.get_height()//2))
+        hint = self.font_tiny.render("ENTER Tekrar  •  ESC Menü", True, (90,90,96))
+        surf.blit(hint, (box.centerx - hint.get_width()//2, box.bottom+14))
 
     def draw_lobby(self, surf, theme):
         gfx.vertical_gradient(surf, tuple(min(255,c+18) for c in theme["bg"]), tuple(max(0,c-14) for c in theme["bg"]))
