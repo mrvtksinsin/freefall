@@ -87,10 +87,28 @@ def load_save():
                 out["settings"][ak] = round(max(0.0, min(1.0, float(out["settings"][ak]))), 2)
             except:
                 out["settings"][ak] = DEFAULT_SAVE["settings"][ak]
-        # ensure unlocked based on level (in case save old)
+        # ensure unlocked based on level + completed_levels (gerçek oyun mantığı: bölüm ilerledikçe karakter açılır)
         lvl = out.get("level", 1)
+        # BÖLÜMLER ilerlemesi de karakter açmalı: completed max + 1 ve unlocked max
+        try:
+            max_completed = max(out.get("completed_levels", []) or [0])
+        except:
+            max_completed = 0
+        try:
+            max_unlocked = max(out.get("unlocked_levels", [1]) or [1])
+        except:
+            max_unlocked = 1
+        effective_level = lvl
+        # bölüm sistemi karakter açma: completed+1 kadar karakter açılmalı
+        if max_completed + 1 > effective_level:
+            effective_level = max_completed + 1
+        if max_unlocked > effective_level:
+            effective_level = max_unlocked
+        # level'i de senkronize et (sonsuz mod + bölüm tek kaynak)
+        if effective_level > out.get("level", 1):
+            out["level"] = effective_level
         for ch in CHARACTERS:
-            if ch["level"] <= lvl and ch["id"] not in out["unlocked_characters"]:
+            if ch["level"] <= effective_level and ch["id"] not in out["unlocked_characters"]:
                 out["unlocked_characters"].append(ch["id"])
         # bölüm sistemi migration — 23 bölüm (1-22 + FINAL 23), kesin sıralı kilit
         if "unlocked_levels" not in out or not isinstance(out["unlocked_levels"], list) or not out["unlocked_levels"]:
@@ -178,7 +196,7 @@ def load_save():
         return _deep_copy_default()
 
 def unlock_next_level(save, completed_level):
-    """Bölüm tamamlanınca bir sonrakini aç (kesin sıralı, atlama yok), save et."""
+    """Bölüm tamamlanınca bir sonrakini aç (kesin sıralı, atlama yok), karakterleri aç."""
     if completed_level not in save.get("completed_levels", []):
         save["completed_levels"].append(completed_level)
         save["completed_levels"] = sorted(set(save["completed_levels"]))
@@ -187,6 +205,11 @@ def unlock_next_level(save, completed_level):
         save["current_level"] = max(save.get("current_level", 1), completed_level)
     except:
         save["current_level"] = completed_level
+    # level (sonsuz mod seviyesi) de bölüm ilerlemesiyle senkronize et — load_save karakter açma için gerekli
+    try:
+        save["level"] = max(save.get("level", 1), completed_level + 1, max(save.get("unlocked_levels", [1]) or [1]))
+    except:
+        pass
     # final bayrağı
     from config import LEVELS as _LVLS
     max_lvl = max(e["level"] for e in _LVLS)
@@ -208,6 +231,18 @@ def unlock_next_level(save, completed_level):
         save["unlocked_levels"] = sorted(x for x in save["unlocked_levels"] if x <= max_c + 1)
         if 1 not in save["unlocked_levels"]:
             save["unlocked_levels"].insert(0, 1)
+    # Karakter unlock: bölüm tamamlanınca yeni açılan seviye + aradaki tüm seviyeler için karakterleri aç
+    # nxt = tamamlanan+1, bu seviyedeki ve altındaki tüm karakterler açılmalı
+    try:
+        effective = nxt if nxt <= max_lvl else max_lvl
+        # level'i de nxt'e çek (karakter açma için)
+        if effective > save.get("level", 1):
+            save["level"] = effective
+        for ch in CHARACTERS:
+            if ch["level"] <= effective and ch["id"] not in save.get("unlocked_characters", []):
+                save["unlocked_characters"].append(ch["id"])
+    except:
+        pass
     return nxt
 
 def save_game(data):
@@ -277,9 +312,10 @@ def update_level_and_unlocks(save, dist_m):
         if px >= e["distance"]:
             new_level = e["level"]
     if new_level > save["level"]:
+        old_level = save["level"]
         save["level"] = new_level
-        # yeni karakterleri aç
+        # yeni karakterleri aç — aradaki tüm seviyeler (1->6 atlamasında 2,3,4,5 de açılmalı)
         for ch in CHARACTERS:
-            if ch["level"] == new_level and ch["id"] not in save["unlocked_characters"]:
+            if old_level < ch["level"] <= new_level and ch["id"] not in save["unlocked_characters"]:
                 save["unlocked_characters"].append(ch["id"])
     return new_level
