@@ -586,20 +586,25 @@ class Game:
                 self.particles.emit_coin(self.player.x+self.player.w//2, self.player.y+self.player.h//2, gained)
                 audio.play("coin5" if gained>=5 else "coin")
             self.camera.update(dt, self.player.y, self.player.alive)
-            # monster her ikisini de tehdit etsin (ortadaki)
-            try:
-                self.monster.update(dt, self.player, self.camera.y)
-                # bot'u da kontrol et — bot ölürse player kazanır
-                bot_caught=False
-                if self.state=="vs_bot" and self.vs_bot and self.vs_bot.alive:
-                    if self.monster.check_catch(self.vs_bot):
-                        self.vs_bot.alive=False
-                        self.vs_bot.state="death"
-                if self.monster.check_catch(self.player) and self.player.alive:
-                    self.player.alive=False; self.player.state="death"
-                    audio.play("death")
-                    self.particles.emit_death(self.player.x+self.player.w//2, self.player.y+self.player.h//2)
-            except: pass
+            # monster — vs_bot yarışında yakalama yok (robot rakibi öldürmesin)
+            if self.state == "vs_bot":
+                try:
+                    # sadece görsel takip, yakalama devre dışı
+                    self.monster.update(dt, self.player, self.camera.y)
+                except: pass
+            else:
+                try:
+                    self.monster.update(dt, self.player, self.camera.y)
+                    # bot'u da kontrol et — bot ölürse player kazanır (sadece online/monster modda)
+                    if self.state=="vs_bot" and self.vs_bot and self.vs_bot.alive:
+                        if self.monster.check_catch(self.vs_bot):
+                            self.vs_bot.alive=False
+                            self.vs_bot.state="death"
+                    if self.monster.check_catch(self.player) and self.player.alive:
+                        self.player.alive=False; self.player.state="death"
+                        audio.play("death")
+                        self.particles.emit_death(self.player.x+self.player.w//2, self.player.y+self.player.h//2)
+                except: pass
             # --- BİTİŞ ÇİZGİSİ — vs_bot ---
             if self.state == "vs_bot" and self.vs_finish_y is not None and self.vs_result is None:
                 player_finished = self.player.alive and self.player.y >= self.vs_finish_y
@@ -1382,6 +1387,12 @@ class Game:
             audio.play("click")
         elif event.key==pygame.K_SPACE:
             self.paused= not self.paused
+        elif event.key in (pygame.K_UP, pygame.K_w):
+            if self.state in ("vs_bot","vs_online"):
+                jumped = self.player.try_jump()
+                if jumped:
+                    self.particles.emit_jump(self.player.x + self.player.w//2, self.player.y + self.player.h)
+                    audio.play("jump")
 
     def handle_vs_result_keys(self, event):
         if event.key in (pygame.K_RETURN, pygame.K_SPACE, pygame.K_r):
@@ -2892,6 +2903,22 @@ class Game:
         col = (120,255,120) if my_m>=opp_m else (255,80,80)
         ltxt = self.font_tiny.render(leader, True, col)
         surf.blit(ltxt, (config.SCREEN_WIDTH//2 - ltxt.get_width()//2, hud_y+22))
+        # ilerleme % — sadece vs_bot için net 0-100
+        if self.state == "vs_bot" and getattr(self, "vs_finish_y", None) is not None:
+            total = max(1, self.vs_finish_y - self.level_start_y)
+            done = max(0, self.player.y - self.level_start_y)
+            prog = max(0.0, min(1.0, done / total))
+            percent = int(prog * 100)
+            if prog >= 1.0:
+                percent = 100
+            prog_txt = self.font_small.render(f"İLERLEME: {percent}%", True, (255,215,0))
+            surf.blit(prog_txt, (config.SCREEN_WIDTH//2 - prog_txt.get_width()//2, hud_y+34))
+            bar = pygame.Rect(config.SCREEN_WIDTH//2-60, hud_y+50, 120, 6)
+            pygame.draw.rect(surf, (40,40,46), bar, border_radius=3)
+            fill = pygame.Rect(bar.x+1, bar.y+1, int((bar.width-2)*prog), bar.height-2)
+            if fill.width>0:
+                pygame.draw.rect(surf, (255,215,0), fill, border_radius=3)
+            pygame.draw.rect(surf, (0,0,0), bar, width=1, border_radius=3)
         # bağlantı uyarısı online
         if self.state=="vs_online" and not self.vs_remote:
             warn = self.font_small.render("Bağlantı bekleniyor...", True, (255,220,100))
