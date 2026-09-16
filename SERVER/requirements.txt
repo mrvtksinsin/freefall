@@ -1,0 +1,2 @@
+# FREEFALL Server — ek bağımlılık yok, sadece Python stdlib (sqlite3, socket)
+# İsteğe bağlı: pygame gerekmez

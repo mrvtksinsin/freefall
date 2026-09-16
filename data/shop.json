@@ -1,0 +1,250 @@
+{
+  "hat": [
+    {
+      "id": "hat1",
+      "name": "Sapka 1",
+      "price": 10,
+      "icon": "H1"
+    },
+    {
+      "id": "hat2",
+      "name": "Sapka 2",
+      "price": 25,
+      "icon": "H2"
+    },
+    {
+      "id": "hat3",
+      "name": "Sapka 3",
+      "price": 40,
+      "icon": "H3"
+    },
+    {
+      "id": "hat4",
+      "name": "Sapka 4",
+      "price": 60,
+      "icon": "H4"
+    },
+    {
+      "id": "hat5",
+      "name": "Sapka 5",
+      "price": 80,
+      "icon": "H5"
+    },
+    {
+      "id": "hat6",
+      "name": "Sapka 6",
+      "price": 100,
+      "icon": "H6"
+    },
+    {
+      "id": "hat7",
+      "name": "Sapka 7",
+      "price": 130,
+      "icon": "H7"
+    },
+    {
+      "id": "hat8",
+      "name": "Sapka 8",
+      "price": 160,
+      "icon": "H8"
+    },
+    {
+      "id": "hat9",
+      "name": "Sapka 9",
+      "price": 200,
+      "icon": "H9"
+    },
+    {
+      "id": "hat10",
+      "name": "Sapka 10",
+      "price": 250,
+      "icon": "H10"
+    }
+  ],
+  "bag": [
+    {
+      "id": "bag1",
+      "name": "Canta 1",
+      "price": 30,
+      "icon": "C1"
+    },
+    {
+      "id": "bag2",
+      "name": "Canta 2",
+      "price": 50,
+      "icon": "C2"
+    },
+    {
+      "id": "bag3",
+      "name": "Canta 3",
+      "price": 75,
+      "icon": "C3"
+    },
+    {
+      "id": "bag4",
+      "name": "Canta 4",
+      "price": 90,
+      "icon": "C4"
+    },
+    {
+      "id": "bag5",
+      "name": "Canta 5",
+      "price": 110,
+      "icon": "C5"
+    },
+    {
+      "id": "bag6",
+      "name": "Canta 6",
+      "price": 135,
+      "icon": "C6"
+    },
+    {
+      "id": "bag7",
+      "name": "Canta 7",
+      "price": 165,
+      "icon": "C7"
+    },
+    {
+      "id": "bag8",
+      "name": "Canta 8",
+      "price": 200,
+      "icon": "C8"
+    },
+    {
+      "id": "bag9",
+      "name": "Canta 9",
+      "price": 240,
+      "icon": "C9"
+    },
+    {
+      "id": "bag10",
+      "name": "Canta 10",
+      "price": 285,
+      "icon": "C10"
+    }
+  ],
+  "glasses": [
+    {
+      "id": "glasses1",
+      "name": "Gozluk 1",
+      "price": 15,
+      "icon": "G1"
+    },
+    {
+      "id": "glasses2",
+      "name": "Gozluk 2",
+      "price": 35,
+      "icon": "G2"
+    },
+    {
+      "id": "glasses3",
+      "name": "Gozluk 3",
+      "price": 55,
+      "icon": "G3"
+    },
+    {
+      "id": "glasses4",
+      "name": "Gozluk 4",
+      "price": 75,
+      "icon": "G4"
+    },
+    {
+      "id": "glasses5",
+      "name": "Gozluk 5",
+      "price": 95,
+      "icon": "G5"
+    },
+    {
+      "id": "glasses6",
+      "name": "Gozluk 6",
+      "price": 120,
+      "icon": "G6"
+    },
+    {
+      "id": "glasses7",
+      "name": "Gozluk 7",
+      "price": 145,
+      "icon": "G7"
+    },
+    {
+      "id": "glasses8",
+      "name": "Gozluk 8",
+      "price": 175,
+      "icon": "G8"
+    },
+    {
+      "id": "glasses9",
+      "name": "Gozluk 9",
+      "price": 210,
+      "icon": "G9"
+    },
+    {
+      "id": "glasses10",
+      "name": "Gozluk 10",
+      "price": 250,
+      "icon": "G10"
+    }
+  ],
+  "cane": [
+    {
+      "id": "cane1",
+      "name": "Baston 1",
+      "price": 50,
+      "icon": "B1"
+    },
+    {
+      "id": "cane2",
+      "name": "Baston 2",
+      "price": 80,
+      "icon": "B2"
+    },
+    {
+      "id": "cane3",
+      "name": "Baston 3",
+      "price": 120,
+      "icon": "B3"
+    },
+    {
+      "id": "cane4",
+      "name": "Baston 4",
+      "price": 150,
+      "icon": "B4"
+    },
+    {
+      "id": "cane5",
+      "name": "Baston 5",
+      "price": 180,
+      "icon": "B5"
+    },
+    {
+      "id": "cane6",
+      "name": "Baston 6",
+      "price": 215,
+      "icon": "B6"
+    },
+    {
+      "id": "cane7",
+      "name": "Baston 7",
+      "price": 255,
+      "icon": "B7"
+    },
+    {
+      "id": "cane8",
+      "name": "Baston 8",
+      "price": 300,
+      "icon": "B8"
+    },
+    {
+      "id": "cane9",
+      "name": "Baston 9",
+      "price": 350,
+      "icon": "B9"
+    },
+    {
+      "id": "cane10",
+      "name": "Baston 10",
+      "price": 400,
+      "icon": "B10"
+    }
+  ]
+}
