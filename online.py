@@ -45,6 +45,7 @@ class OnlineManager:
         self._running = False
         self._thread = None
         self._online_status = False  # sunucuya bağlı mı
+        self.session_token = save.get("session_token") if isinstance(save, dict) else None
         # Persistent lobby/invite
         self._persistent_sock = None
         self._persistent_thread = None
@@ -166,6 +167,261 @@ class OnlineManager:
                 return False, "Server geçersiz ID üretti"
         print(f"[CLIENT] REGISTER failed: {resp}")
         return False, resp.get("error", "Kayıt hatası")
+
+    # --- AŞAMA 1 + FULL: hesap sistemi (şifreli + session + server-authoritative) ---
+    def account_register(self, nickname, password, password2=None):
+        """Hesap oluştur: nickname + şifre -> server 5 haneli ID üretir, hash saklar. (legacy, nickname'li)"""
+        nick = str(nickname).strip()
+        pw = str(password or "")
+        pw2 = str(password2 if password2 is not None else pw)
+        if len(nick) < 2 or len(nick) > 16:
+            return False, "Nickname 2-16 karakter olmalı"
+        if len(pw) < 3 or len(pw) > 32:
+            return False, "Şifre 3-32 karakter olmalı"
+        if pw != pw2:
+            return False, "Şifreler eşleşmiyor"
+        if not self._connect(timeout=2.0):
+            return False, "Sunucuya bağlanılamadı."
+        ok = self._send_json({"type": "account_register", "nickname": nick, "password": pw, "password2": pw2})
+        if not ok:
+            try: self._sock.close()
+            except: pass
+            return False, "Gönderim hatası"
+        resp = self._recv_line(timeout=2.0)
+        try: self._sock.close()
+        except: pass
+        self.connected=False
+        if not resp:
+            return False, "Sunucudan yanıt yok"
+        if resp.get("ok") and resp.get("player_id"):
+            pid = str(resp["player_id"])
+            nick_srv = resp.get("nickname") or nick
+            token = resp.get("session_token")
+            if is_valid_id(pid):
+                self.save["nickname"] = nick_srv
+                self.save["player_id"] = pid
+                if token:
+                    self.save["session_token"] = token
+                    self.session_token = token
+                # game_data server-authoritative ise onu da al
+                if resp.get("game_data"):
+                    # local cache olarak saklanabilir ama authoritative server
+                    self.save["server_game_data"] = resp["game_data"]
+                try:
+                    import save_system
+                    save_system.save_game(self.save)
+                except: pass
+                self._online_status = True
+                return True, pid
+        return False, resp.get("error", "Kayıt hatası")
+
+    def create_account_auto(self, password, password2=None):
+        """Yeni FULL sistem: sadece şifre, server random nickname + ID üretir."""
+        pw = str(password or "")
+        pw2 = str(password2 if password2 is not None else pw)
+        if len(pw) < 3 or len(pw) > 32:
+            return False, "Şifre 3-32 karakter olmalı"
+        if pw != pw2:
+            return False, "Şifreler eşleşmiyor"
+        if not self._connect(timeout=2.5):
+            return False, "Sunucuya bağlanılamadı."
+        ok = self._send_json({"type": "account_register", "password": pw, "password2": pw2})
+        if not ok:
+            try: self._sock.close()
+            except: pass
+            return False, "Gönderim hatası"
+        resp = self._recv_line(timeout=3.0)
+        try: self._sock.close()
+        except: pass
+        self.connected=False
+        if not resp:
+            return False, "Sunucudan yanıt yok"
+        if resp.get("ok") and resp.get("player_id"):
+            pid = str(resp["player_id"])
+            nick = resp.get("nickname")
+            token = resp.get("session_token")
+            if is_valid_id(pid):
+                self.save["nickname"] = nick
+                self.save["player_id"] = pid
+                if token:
+                    self.save["session_token"] = token
+                    self.session_token = token
+                if resp.get("game_data"):
+                    self.save["server_game_data"] = resp["game_data"]
+                try:
+                    import save_system
+                    save_system.save_game(self.save)
+                except: pass
+                self._online_status = True
+                return True, pid
+        return False, resp.get("error", "Kayıt hatası")
+
+    def guest_login(self):
+        """Hesapsız oyna: server guest nickname üretir, kalıcı değil."""
+        if not self._connect(timeout=2.0):
+            return False, "Sunucuya bağlanılamadı."
+        ok = self._send_json({"type": "guest"})
+        if not ok:
+            try: self._sock.close()
+            except: pass
+            return False, "Gönderim hatası"
+        resp = self._recv_line(timeout=2.0)
+        try: self._sock.close()
+        except: pass
+        self.connected=False
+        if resp and resp.get("ok") and resp.get("player_id"):
+            pid = str(resp["player_id"])
+            nick = resp.get("nickname")
+            # guest için local save'e kalıcı yazma — sadece memory
+            self._online_status = True
+            return True, {"player_id": pid, "nickname": nick, "guest": True, "game_data": resp.get("game_data")}
+        return False, resp.get("error", "Guest hatası") if resp else "Sunucudan yanıt yok"
+
+    def account_login(self, player_id, password):
+        """Giriş yap: player_id VEYA nickname + şifre. (ID veya şifre hatalı genel hata)"""
+        login = str(player_id).strip()
+        pw = str(password or "")
+        if not login or len(pw) < 3 or len(pw) > 32:
+            return False, "ID veya şifre hatalı."
+        # login 5 haneli mi yoksa nickname mi? her ikisi de olabilir
+        if not self._connect(timeout=1.8):
+            self._online_status=False
+            return False, "Sunucuya bağlanılamadı."
+        # nickname ile login de destekle: server login artık nickname de kabul ediyor
+        payload = {"type": "account_login", "password": pw}
+        if is_valid_id(login):
+            payload["player_id"] = login
+        else:
+            payload["login"] = login
+            payload["nickname"] = login
+        self._send_json(payload)
+        resp = self._recv_line(timeout=1.8)
+        try: self._sock.close()
+        except: pass
+        self.connected=False
+        if resp and resp.get("ok"):
+            player = resp.get("player") or {}
+            pid = resp.get("player_id") or player.get("player_id") or login
+            nick = player.get("nickname") or resp.get("nickname") or self.save.get("nickname")
+            token = resp.get("session_token")
+            if is_valid_id(pid):
+                self.save["player_id"] = pid
+                if nick:
+                    self.save["nickname"] = nick
+                if token:
+                    self.save["session_token"] = token
+                    self.session_token = token
+                if resp.get("game_data"):
+                    self.save["server_game_data"] = resp["game_data"]
+                try:
+                    import save_system
+                    save_system.save_game(self.save)
+                except: pass
+                self._online_status=True
+                return True, "ok"
+            # guest gibi pid yoksa
+            self._online_status=True
+            return True, "ok"
+        self._online_status=False
+        return False, resp.get("error", "ID veya şifre hatalı.") if resp else "Sunucudan yanıt yok"
+
+    def session_check(self, player_id=None, token=None):
+        pid = str(player_id or self.save.get("player_id") or "").strip()
+        tok = str(token or self.save.get("session_token") or self.session_token or "").strip()
+        if not is_valid_id(pid) or not tok:
+            return False, "Oturum yok"
+        if not self._connect(timeout=1.2):
+            return False, "Sunucuya bağlanılamadı."
+        self._send_json({"type": "session_check", "player_id": pid, "session_token": tok})
+        resp = self._recv_line(timeout=1.5)
+        try: self._sock.close()
+        except: pass
+        self.connected=False
+        if resp and resp.get("ok") and resp.get("valid"):
+            return True, resp
+        return False, resp.get("error", "Oturum geçersiz") if resp else "Sunucudan yanıt yok"
+
+    def get_game_data(self, player_id=None, token=None):
+        pid = str(player_id or self.save.get("player_id") or "").strip()
+        tok = str(token or self.save.get("session_token") or self.session_token or "").strip()
+        if not is_valid_id(pid) or not tok:
+            return False, "Oturum yok"
+        if not self._connect(timeout=1.5):
+            return False, "Sunucuya bağlanılamadı."
+        self._send_json({"type": "get_game_data", "player_id": pid, "session_token": tok})
+        resp = self._recv_line(timeout=1.8)
+        try: self._sock.close()
+        except: pass
+        self.connected=False
+        if resp and resp.get("ok") and resp.get("game_data"):
+            return True, resp["game_data"]
+        return False, resp.get("error", "Game data alınamadı") if resp else "Sunucudan yanıt yok"
+
+    def save_game_data(self, game_data, player_id=None, token=None):
+        pid = str(player_id or self.save.get("player_id") or "").strip()
+        tok = str(token or self.save.get("session_token") or self.session_token or "").strip()
+        if not is_valid_id(pid) or not tok:
+            return False, "Oturum yok"
+        if not isinstance(game_data, dict):
+            return False, "Geçersiz game_data"
+        if not self._connect(timeout=1.5):
+            return False, "Sunucuya bağlanılamadı."
+        self._send_json({"type": "save_game_data", "player_id": pid, "session_token": tok, "game_data": game_data})
+        resp = self._recv_line(timeout=1.5)
+        try: self._sock.close()
+        except: pass
+        self.connected=False
+        if resp and resp.get("ok"):
+            return True, "ok"
+        return False, resp.get("error", "Kaydetme hatası") if resp else "Sunucudan yanıt yok"
+
+    def delete_account(self, player_id, password):
+        pid = str(player_id).strip()
+        pw = str(password or "")
+        tok = str(self.save.get("session_token") or self.session_token or "").strip()
+        if not is_valid_id(pid):
+            return False, "Geçersiz ID"
+        if not self._connect(timeout=2.0):
+            return False, "Sunucuya bağlanılamadı."
+        self._send_json({"type": "delete_account", "player_id": pid, "password": pw, "session_token": tok})
+        resp = self._recv_line(timeout=2.0)
+        try: self._sock.close()
+        except: pass
+        self.connected=False
+        if resp and resp.get("ok"):
+            return True, "ok"
+        return False, resp.get("error", "Silme hatası") if resp else "Sunucudan yanıt yok"
+
+    def account_logout(self, player_id=None):
+        """Oturumu kapat: server'a bildir, yerelde session temizlenecek (şifre yazılmaz)."""
+        pid = str(player_id or self.save.get("player_id") or "").strip()
+        tok = str(self.save.get("session_token") or self.session_token or "").strip()
+        if is_valid_id(pid):
+            try:
+                if self._connect(timeout=1.0):
+                    payload = {"type": "logout", "player_id": pid}
+                    if tok:
+                        payload["session_token"] = tok
+                    self._send_json(payload)
+                    self._recv_line(timeout=1.0)
+                    try: self._sock.close()
+                    except: pass
+                    self.connected=False
+            except:
+                pass
+        # yerelde token temizle
+        self.session_token = None
+        if "session_token" in self.save:
+            self.save.pop("session_token", None)
+        if "server_game_data" in self.save:
+            self.save.pop("server_game_data", None)
+        try:
+            import save_system
+            save_system.save_game(self.save)
+        except:
+            pass
+        self._online_status=False
+        return True, "ok"
 
     def login(self):
         """Var olan ID ile giriş — online ol."""

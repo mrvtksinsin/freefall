@@ -51,6 +51,10 @@ DEFAULT_SAVE = {
     # Oyuncu profili — kalıcı 5 haneli ID
     "nickname": None,
     "player_id": None,
+    # Session ve server-authoritative cache (şifre asla yazılmaz)
+    "session_token": None,
+    "server_game_data": None,
+    "guest_mode": False,
 }
 
 def _deep_copy_default():
@@ -144,6 +148,26 @@ def load_save():
                 out["player_id"] = None
             else:
                 out["player_id"] = pid
+        # session_token — remembered account (şifre asla yazılmaz, token loglanmaz)
+        if "session_token" not in out or out.get("session_token") is None:
+            # None veya eksik -> olduğu gibi bırak
+            tok = out.get("session_token")
+            if tok is not None and not isinstance(tok, str):
+                out["session_token"] = None
+        else:
+            tok = str(out["session_token"]).strip()
+            if not tok or len(tok) < 16:
+                out["session_token"] = None
+            else:
+                out["session_token"] = tok
+        # server_game_data — sadece cache, authoritative değil
+        if "server_game_data" not in out:
+            out["server_game_data"] = None
+        elif out["server_game_data"] is not None and not isinstance(out["server_game_data"], dict):
+            out["server_game_data"] = None
+        # guest_mode
+        if "guest_mode" not in out or not isinstance(out.get("guest_mode"), bool):
+            out["guest_mode"] = bool(out.get("guest_mode", False))
         # 23 dahil clamp — bozulursa güvenli varsayılan
         try:
             out["unlocked_levels"] = sorted(set(int(x) for x in out["unlocked_levels"] if 1 <= int(x) <= 23))

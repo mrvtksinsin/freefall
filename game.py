@@ -53,10 +53,20 @@ class Game:
         self.levels_index = 0  # seçim ekranı cursor
         self.levels_scroll = 0
 
-        # profil — kalıcı 5 haneli ID
+        # profil — kalıcı 5 haneli ID (offline)
         self.profile_nick_input = ""
         self.profile_error = ""
         self.profile_active = False
+        # Hesap sistemi (AŞAMA 1) — şifre plain tutulmaz
+        self.account_state = None  # None / "register" / "login"
+        self.account_nick = ""
+        self.account_pass = ""
+        self.account_pass2 = ""
+        self.account_id_input = ""
+        self.account_login_pass = ""
+        self.account_error = ""
+        self.account_focus = 0  # 0 nick/id, 1 pass, 2 pass2
+        self.account_success_msg = ""
         # VS / Online
         self.play_select_index = 0  # 0 ONLINE, 1 BOT
         self.online_input = ""  # 5 haneli ID giriş
@@ -82,26 +92,52 @@ class Game:
         self._poll_timer = 0.0
         self._vs_sync_timer = 0.0
         self._lobby_gone_count = 0
+        self._last_server_sync = 0.0
+        self._pending_server_sync = False
 
-        # ilk açılışta sadece Nickname yoksa profil ekranına zorla — ID server'da ONLINE'da oluşur
+        # Hesap sistemi FULL: gate ve hatırlama
+        self.gate_index = 0
+        self.remembered_summary = None
+        self.guest_mode = False
+        self.guest_nick = None
+        self.gate_error = ""
+        # ilk açılışta ACCOUNT GATE (server-authoritative öncesi)
+        # remembered account kontrolü
         import save_system as _ss
         try:
-            if not _ss.is_valid_nick(self.save.get("nickname") or ""):
-                self.state = "profile_create"
-                self.profile_nick_input = ""
-                self.profile_error = ""
-            # NOT: ana menü ve offline sistemler için server bağlantısı GEREKMEZ
-            # Server'a sadece OYNA->ONLINE'da bağlanılacak
+            pid = str(self.save.get("player_id") or "").strip()
+            tok = str(self.save.get("session_token") or "").strip()
+            nick = str(self.save.get("nickname") or "").strip()
+            # eğer hatırda hesap var ve session_token var, server'dan doğrula
+            if pid and tok and _ss.is_valid_player_id(pid):
+                # bg thread ile session_check yapılacak, şimdilik returning gate göster
+                self.state = "account_returning"
+                self.remembered_summary = {"player_id": pid, "nickname": nick}
+                # async check: online_mgr session_check
+                self.gate_error = "Hesap doğrulanıyor..."
+            elif _ss.is_valid_nick(nick) and _ss.is_valid_player_id(pid):
+                # eski tarz hatırda hesap (session yok ama player_id var) -> yine returning
+                self.state = "account_returning"
+                self.remembered_summary = {"player_id": pid, "nickname": nick}
+            else:
+                # hiç hatırda yok -> gate
+                self.state = "account_gate"
+            # eğer hiç nickname bile yoksa, gate zaten
+            if not self.state in ("account_gate", "account_returning", "profile_create"):
+                if not _ss.is_valid_nick(nick):
+                    self.state = "account_gate"
         except:
-            pass
+            self.state = "account_gate"
 
         self.menu_index = 0
         self.menu_options = ["OYNA", "BÖLÜMLER", "KARAKTERLER", "MAGAZA", "ENVANTER", "TEMALAR", "AYARLAR", "CIKIS"]
         self.shop_tab = 0
         self.shop_index = 0
+        self.shop_scroll = 0
         self.char_index = 0
         self.inv_tab = 0
         self.inv_index = 0
+        self.inv_scroll = 0
         self.theme_index = 0
 
         # settings slider index
@@ -207,6 +243,7 @@ class Game:
             if nxt <= len(config.LEVELS) and nxt not in self.save["unlocked_levels"]:
                 self.save["unlocked_levels"].append(nxt)
         save_system.save_game(self.save)
+        self._sync_game_data_to_server()
         # level_complete verisi
         self.level_complete_data = {
             "level": lvl,
@@ -332,6 +369,7 @@ class Game:
                         break
                 # partikül
                 self.particles.emit_levelup(self.player.x + self.player.w//2, self.player.y)
+                self._sync_game_data_to_server()
         return new_level
 
     def get_equipped(self):
@@ -348,6 +386,196 @@ class Game:
             if c["id"] == sel:
                 return c
         return config.CHARACTERS[0]
+
+    def _draw_item_preview(self, surf, rect, category, item_id):
+        """Her item_id için farklı siluet (PNG yok, sadece renk değil şekil)."""
+        cx, cy = rect.center
+        try:
+            # numara çıkar: hat10 -> 10
+            num = 1
+            try:
+                digits = "".join(ch for ch in item_id if ch.isdigit())
+                num = int(digits) if digits else 1
+            except:
+                num = 1
+            if category == "hat":
+                if num == 1:  # klasik küçük şapka
+                    pygame.draw.ellipse(surf, (40,40,50), pygame.Rect(cx-18, cy-2, 36, 14))
+                    pygame.draw.rect(surf, (200,40,50), pygame.Rect(cx-12, cy-10, 24, 10), border_radius=3)
+                elif num == 2:  # uzun silindir
+                    pygame.draw.rect(surf, (30,30,35), pygame.Rect(cx-14, cy-18, 28, 22), border_radius=3)
+                    pygame.draw.rect(surf, (180,30,30), pygame.Rect(cx-16, cy-0, 32, 5))
+                elif num == 3:  # sivri büyücü
+                    pygame.draw.polygon(surf, (90,30,150), [(cx, cy-18),(cx-16, cy+8),(cx+16, cy+8)])
+                    pygame.draw.rect(surf, (255,215,0), pygame.Rect(cx-16, cy+6, 32, 4))
+                elif num == 4:  # bere
+                    pygame.draw.ellipse(surf, (180,40,40), pygame.Rect(cx-20, cy-8, 40, 16))
+                    pygame.draw.ellipse(surf, (40,40,50), pygame.Rect(cx-8, cy-10, 16, 6))
+                elif num == 5:  # kovboy
+                    pygame.draw.ellipse(surf, (120,80,40), pygame.Rect(cx-22, cy-2, 44, 10))
+                    pygame.draw.rect(surf, (90,60,30), pygame.Rect(cx-12, cy-12, 24, 14), border_radius=2)
+                    pygame.draw.arc(surf, (60,40,20), pygame.Rect(cx-12, cy-12, 24, 14), 0, 3.14, 2)
+                elif num == 6:  # taç
+                    pts=[(cx-18, cy+6),(cx-14, cy-10),(cx-7, cy+2),(cx, cy-14),(cx+7, cy+2),(cx+14, cy-10),(cx+18, cy+6)]
+                    pygame.draw.polygon(surf, (255,215,0), pts)
+                    pygame.draw.polygon(surf, (180,140,0), pts, width=2)
+                    pygame.draw.circle(surf, (255,255,255), (cx, cy-6), 3)
+                elif num == 7:  # geniş kenarlı
+                    pygame.draw.ellipse(surf, (60,60,70), pygame.Rect(cx-24, cy-2, 48, 12))
+                    pygame.draw.rect(surf, (40,40,50), pygame.Rect(cx-10, cy-14, 20, 14), border_radius=6)
+                elif num == 8:  # kask
+                    pygame.draw.circle(surf, (70,70,80), (cx, cy-2), 16)
+                    pygame.draw.rect(surf, (50,50,60), pygame.Rect(cx-16, cy-2, 32, 8))
+                    pygame.draw.circle(surf, (255,215,0), (cx+8, cy-6), 3)
+                elif num == 9:  # parti
+                    pygame.draw.polygon(surf, (255,100,150), [(cx, cy-18),(cx-10, cy+10),(cx+10, cy+10)])
+                    pygame.draw.circle(surf, (255,215,0), (cx, cy-18), 3)
+                    for dx in (-8,0,8):
+                        pygame.draw.circle(surf, (255,255,255), (cx+dx, cy+2), 2)
+                else:  # hat10 özel dekoratif
+                    pygame.draw.ellipse(surf, (40,40,50), pygame.Rect(cx-18, cy-4, 36, 14))
+                    pygame.draw.rect(surf, (90,30,150), pygame.Rect(cx-14, cy-12, 28, 12), border_radius=6)
+                    pygame.draw.circle(surf, (255,215,0), (cx, cy-14), 5)
+                    pygame.draw.circle(surf, (255,100,50), (cx, cy-14), 2)
+            elif category == "bag":
+                if num == 1:  # küçük sırt
+                    pygame.draw.rect(surf, (90,60,30), pygame.Rect(cx-12, cy-6, 24, 18), border_radius=6)
+                    pygame.draw.rect(surf, (60,40,20), pygame.Rect(cx-8, cy-10, 16, 6), border_radius=3)
+                elif num == 2:  # büyük sırt
+                    pygame.draw.rect(surf, (80,50,30), pygame.Rect(cx-16, cy-10, 32, 24), border_radius=7)
+                    pygame.draw.rect(surf, (50,35,20), pygame.Rect(cx-10, cy-14, 20, 8), border_radius=3)
+                    pygame.draw.rect(surf, (255,215,0), pygame.Rect(cx-4, cy, 8, 6))
+                elif num == 3:  # tek omuz
+                    pygame.draw.rect(surf, (120,80,40), pygame.Rect(cx-16, cy-4, 28, 16), border_radius=4)
+                    pygame.draw.line(surf, (60,40,20), (cx+10, cy-4), (cx+14, cy-14), 3)
+                elif num == 4:  # okul
+                    pygame.draw.rect(surf, (30,60,120), pygame.Rect(cx-14, cy-8, 28, 20), border_radius=5)
+                    pygame.draw.rect(surf, (20,40,80), pygame.Rect(cx-12, cy+2, 24, 6))
+                    pygame.draw.circle(surf, (255,255,255), (cx, cy-2), 3)
+                elif num == 5:  # spor
+                    pygame.draw.rect(surf, (40,80,40), pygame.Rect(cx-18, cy-6, 36, 16), border_radius=8)
+                    pygame.draw.rect(surf, (30,60,30), pygame.Rect(cx-18, cy-6, 36, 6), border_radius=8)
+                elif num == 6:  # kutu/metal
+                    pygame.draw.rect(surf, (120,120,130), pygame.Rect(cx-16, cy-8, 32, 18), border_radius=2)
+                    pygame.draw.rect(surf, (80,80,90), pygame.Rect(cx-16, cy-8, 32, 4))
+                    pygame.draw.circle(surf, (40,40,50), (cx, cy+4), 4, width=2)
+                elif num == 7:  # bel
+                    pygame.draw.rect(surf, (70,70,80), pygame.Rect(cx-14, cy-2, 28, 12), border_radius=6)
+                    pygame.draw.rect(surf, (50,50,60), pygame.Rect(cx-14, cy-2, 28, 4))
+                elif num == 8:  # seyahat
+                    pygame.draw.rect(surf, (100,70,40), pygame.Rect(cx-18, cy-8, 36, 20), border_radius=4)
+                    pygame.draw.rect(surf, (60,40,20), pygame.Rect(cx-6, cy-14, 12, 8), border_radius=2)
+                    pygame.draw.line(surf, (40,30,20), (cx-10, cy+6), (cx+10, cy+6), 2)
+                elif num == 9:  # süslü
+                    pygame.draw.rect(surf, (150,50,80), pygame.Rect(cx-14, cy-8, 28, 18), border_radius=8)
+                    pygame.draw.circle(surf, (255,215,0), (cx, cy-2), 5)
+                else:  # bag10 büyük özel
+                    pygame.draw.rect(surf, (90,60,30), pygame.Rect(cx-18, cy-10, 36, 24), border_radius=8)
+                    pygame.draw.rect(surf, (60,40,20), pygame.Rect(cx-12, cy-14, 24, 8), border_radius=4)
+                    pygame.draw.rect(surf, (255,215,0), pygame.Rect(cx-6, cy, 12, 8))
+            elif category == "glasses":
+                if num == 1:  # yuvarlak
+                    pygame.draw.circle(surf, (30,30,40), (cx-10, cy), 10, width=3)
+                    pygame.draw.circle(surf, (30,30,40), (cx+10, cy), 10, width=3)
+                    pygame.draw.line(surf, (30,30,40), (cx-10, cy), (cx+10, cy), 2)
+                elif num == 2:  # kare
+                    pygame.draw.rect(surf, (30,30,40), pygame.Rect(cx-18, cy-8, 16, 14), width=3)
+                    pygame.draw.rect(surf, (30,30,40), pygame.Rect(cx+2, cy-8, 16, 14), width=3)
+                    pygame.draw.line(surf, (30,30,40), (cx-2, cy), (cx+2, cy), 2)
+                elif num == 3:  # büyük güneş
+                    pygame.draw.ellipse(surf, (20,20,30), pygame.Rect(cx-20, cy-10, 20, 16))
+                    pygame.draw.ellipse(surf, (20,20,30), pygame.Rect(cx, cy-10, 20, 16))
+                    pygame.draw.rect(surf, (20,20,30), pygame.Rect(cx-4, cy-4, 8, 4))
+                elif num == 4:  # ince
+                    pygame.draw.circle(surf, (80,80,90), (cx-10, cy), 9, width=1)
+                    pygame.draw.circle(surf, (80,80,90), (cx+10, cy), 9, width=1)
+                    pygame.draw.line(surf, (80,80,90), (cx-10, cy), (cx+10, cy), 1)
+                elif num == 5:  # kalın
+                    pygame.draw.circle(surf, (10,10,20), (cx-10, cy), 10, width=5)
+                    pygame.draw.circle(surf, (10,10,20), (cx+10, cy), 10, width=5)
+                    pygame.draw.line(surf, (10,10,20), (cx-10, cy), (cx+10, cy), 4)
+                elif num == 6:  # yıldız
+                    pygame.draw.circle(surf, (30,30,40), (cx-10, cy), 9, width=2)
+                    pygame.draw.circle(surf, (30,30,40), (cx+10, cy), 9, width=2)
+                    pygame.draw.line(surf, (255,215,0), (cx, cy-6), (cx, cy+6), 2)
+                elif num == 7:  # vizör tek parça
+                    pygame.draw.rect(surf, (30,30,40), pygame.Rect(cx-20, cy-8, 40, 14), border_radius=7)
+                    pygame.draw.rect(surf, (80,140,200), pygame.Rect(cx-18, cy-6, 36, 10), border_radius=6)
+                elif num == 8:  # küçük oval
+                    pygame.draw.ellipse(surf, (30,30,40), pygame.Rect(cx-16, cy-8, 14, 12), width=2)
+                    pygame.draw.ellipse(surf, (30,30,40), pygame.Rect(cx+2, cy-8, 14, 12), width=2)
+                elif num == 9:  # spor
+                    pygame.draw.ellipse(surf, (20,80,120), pygame.Rect(cx-20, cy-8, 40, 14))
+                    pygame.draw.ellipse(surf, (255,215,0), pygame.Rect(cx-20, cy-8, 40, 14), width=2)
+                else:  # glasses10 dekoratif
+                    pygame.draw.circle(surf, (150,30,80), (cx-10, cy), 10, width=3)
+                    pygame.draw.circle(surf, (150,30,80), (cx+10, cy), 10, width=3)
+                    pygame.draw.line(surf, (150,30,80), (cx-10, cy), (cx+10, cy), 2)
+                    pygame.draw.circle(surf, (255,215,0), (cx-10, cy-4), 2)
+                    pygame.draw.circle(surf, (255,215,0), (cx+10, cy-4), 2)
+            elif category == "cane":
+                if num == 1:  # düz klasik
+                    pygame.draw.line(surf, (90,60,20), (cx, cy-16), (cx, cy+16), 5)
+                elif num == 2:  # kıvrımlı
+                    pygame.draw.line(surf, (90,60,20), (cx, cy-4), (cx, cy+16), 5)
+                    pygame.draw.arc(surf, (90,60,20), pygame.Rect(cx-10, cy-16, 20, 16), 0, 3.14, 3)
+                elif num == 3:  # altın dekoratif
+                    pygame.draw.line(surf, (180,140,20), (cx, cy-16), (cx, cy+16), 5)
+                    pygame.draw.circle(surf, (255,215,0), (cx, cy-16), 7)
+                    pygame.draw.circle(surf, (180,140,20), (cx, cy-16), 7, width=2)
+                elif num == 4:  # kısa
+                    pygame.draw.line(surf, (90,60,20), (cx, cy-8), (cx, cy+12), 5)
+                    pygame.draw.circle(surf, (60,40,20), (cx, cy-8), 5)
+                elif num == 5:  # uzun
+                    pygame.draw.line(surf, (90,60,20), (cx, cy-20), (cx, cy+18), 4)
+                    pygame.draw.circle(surf, (90,60,20), (cx, cy-20), 5)
+                elif num == 6:  # başı yuvarlak
+                    pygame.draw.line(surf, (90,60,20), (cx, cy-8), (cx, cy+16), 5)
+                    pygame.draw.circle(surf, (200,40,40), (cx, cy-12), 8)
+                elif num == 7:  # başı geometrik
+                    pygame.draw.line(surf, (90,60,20), (cx, cy-8), (cx, cy+16), 5)
+                    pygame.draw.rect(surf, (40,40,80), pygame.Rect(cx-7, cy-18, 14, 10), border_radius=2)
+                elif num == 8:  # sihirli asa
+                    pygame.draw.line(surf, (70,50,120), (cx, cy-16), (cx, cy+16), 4)
+                    pts=[(cx, cy-20),(cx-4, cy-12),(cx-6, cy-14),(cx, cy-8),(cx+6, cy-14),(cx+4, cy-12)]
+                    pygame.draw.polygon(surf, (255,215,0), pts)
+                elif num == 9:  # süslü
+                    pygame.draw.line(surf, (90,60,20), (cx, cy-16), (cx, cy+16), 4)
+                    pygame.draw.line(surf, (180,40,80), (cx+2, cy-16), (cx+2, cy+16), 2)
+                    pygame.draw.circle(surf, (180,40,80), (cx, cy-16), 4)
+                else:  # cane10 özel büyük
+                    pygame.draw.line(surf, (90,60,20), (cx, cy-16), (cx, cy+16), 7)
+                    pygame.draw.circle(surf, (40,40,80), (cx, cy-16), 9)
+                    pygame.draw.circle(surf, (255,215,0), (cx, cy-16), 4)
+        except:
+            pass
+
+    def _get_shop_scroll_top(self, lst_len):
+        visible = 6
+        max_top = max(0, lst_len - visible)
+        # seçili ortada kalsın
+        top = self.shop_index - 2
+        if top < 0: top = 0
+        if top > max_top: top = max_top
+        return top
+
+    def _get_inv_scroll_top(self, owned_len):
+        visible = 6
+        max_top = max(0, owned_len - visible)
+        top = self.inv_index - 2
+        if top < 0: top = 0
+        if top > max_top: top = max_top
+        return top
+
+    def _update_shop_scroll(self):
+        lst,_ = self.current_shop_list()
+        self.shop_scroll = self._get_shop_scroll_top(len(lst))
+
+    def _update_inv_scroll(self):
+        tabs_key=["hat","bag","glasses","cane"]
+        key=tabs_key[self.inv_tab]
+        owned=[it for it in config.SHOP_ITEMS[key] if it["id"] in self.save["owned_items"]]
+        self.inv_scroll = self._get_inv_scroll_top(len(owned))
 
     def update(self, dt, keys_held):
         # transition alpha
@@ -418,6 +646,9 @@ class Game:
                             self.start_multiplayer_game(gid)
                 except:
                     pass
+            # pending server sync retry (throttle ile)
+            if getattr(self, "_pending_server_sync", False):
+                self._sync_game_data_to_server()
 
         # Bölüm tamamlama / final ekranları — input bekle, timer ilerlet
         if self.state == "level_complete":
@@ -462,6 +693,7 @@ class Game:
                     audio.play("coin5", 0.7)
                 else:
                     audio.play("coin")
+                self._sync_game_data_to_server()
 
             self.camera.update(dt, self.player.y, self.player.alive)
             # Bölümlü kaçış modunda canavar ve bitiş
@@ -585,6 +817,7 @@ class Game:
                 self.player.coins+=gained
                 self.particles.emit_coin(self.player.x+self.player.w//2, self.player.y+self.player.h//2, gained)
                 audio.play("coin5" if gained>=5 else "coin")
+                self._sync_game_data_to_server()
             self.camera.update(dt, self.player.y, self.player.alive)
             # monster — vs_bot yarışında yakalama yok (robot rakibi öldürmesin)
             if self.state == "vs_bot":
@@ -746,6 +979,14 @@ class Game:
                 self.handle_ending_keys(event)
             elif self.state == "profile_create":
                 self.handle_profile_keys(event)
+            elif self.state == "account_register":
+                self.handle_account_register_keys(event)
+            elif self.state == "account_login":
+                self.handle_account_login_keys(event)
+            elif self.state == "account_gate":
+                self.handle_account_gate_keys(event)
+            elif self.state == "account_returning":
+                self.handle_account_returning_keys(event)
             elif self.state == "play_select":
                 self.handle_play_select_keys(event)
             elif self.state == "online_menu":
@@ -774,6 +1015,7 @@ class Game:
                 else:
                     lst,_ = self.current_shop_list()
                     self.shop_index = min(len(lst)-1, self.shop_index+1)
+                self._update_shop_scroll()
             elif self.state == "inventory":
                 if event.y > 0:
                     self.inv_index = max(0, self.inv_index-1)
@@ -782,6 +1024,7 @@ class Game:
                     key=tabs[self.inv_tab]
                     owned = [it for it in config.SHOP_ITEMS[key] if it["id"] in self.save["owned_items"]]
                     self.inv_index = min(max(0,len(owned)-1), self.inv_index+1)
+                self._update_inv_scroll()
             elif self.state == "levels":
                 if event.y > 0:
                     self.levels_index = max(0, self.levels_index-1)
@@ -844,14 +1087,14 @@ class Game:
         if event.key == pygame.K_ESCAPE:
             self.state = "menu"; save_system.save_game(self.save); return
         if event.key == pygame.K_LEFT:
-            self.shop_tab = (self.shop_tab -1) % 4; self.shop_index = 0; audio.play("hover",0.6)
+            self.shop_tab = (self.shop_tab -1) % 4; self.shop_index = 0; self.shop_scroll = 0; audio.play("hover",0.6)
         elif event.key == pygame.K_RIGHT:
-            self.shop_tab = (self.shop_tab +1) %4; self.shop_index = 0; audio.play("hover",0.6)
+            self.shop_tab = (self.shop_tab +1) %4; self.shop_index = 0; self.shop_scroll = 0; audio.play("hover",0.6)
         elif event.key == pygame.K_UP:
-            self.shop_index = max(0, self.shop_index-1)
+            self.shop_index = max(0, self.shop_index-1); self._update_shop_scroll()
         elif event.key == pygame.K_DOWN:
             lst,_ = self.current_shop_list()
-            self.shop_index = min(len(lst)-1, self.shop_index+1)
+            self.shop_index = min(len(lst)-1, self.shop_index+1); self._update_shop_scroll()
         elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
             lst,key = self.current_shop_list()
             if 0 <= self.shop_index < len(lst):
@@ -864,6 +1107,7 @@ class Game:
                     else:
                         self.save[sel_key] = item["id"]
                     save_system.save_game(self.save)
+                    self._sync_game_data_to_server()
                 else:
                     if self.save["total_coins"] >= item["price"]:
                         self.save["total_coins"] -= item["price"]
@@ -871,6 +1115,7 @@ class Game:
                         sel_key = {"hat":"selected_hat","bag":"selected_bag","glasses":"selected_glasses","cane":"selected_cane"}[key]
                         self.save[sel_key] = item["id"]
                         save_system.save_game(self.save)
+                        self._sync_game_data_to_server()
                         audio.play("coin")
                     else:
                         audio.play("death",0.4)
@@ -892,22 +1137,23 @@ class Game:
             if ch["id"] in self.save["unlocked_characters"]:
                 self.save["selected_character"] = ch["id"]
                 save_system.save_game(self.save)
+                self._sync_game_data_to_server()
                 audio.play("click")
 
     def handle_inv_keys(self, event):
         if event.key == pygame.K_ESCAPE:
             self.state="menu"; return
         if event.key == pygame.K_LEFT:
-            self.inv_tab = (self.inv_tab -1) %4; self.inv_index=0; audio.play("hover",0.6)
+            self.inv_tab = (self.inv_tab -1) %4; self.inv_index=0; self.inv_scroll=0; audio.play("hover",0.6)
         elif event.key == pygame.K_RIGHT:
-            self.inv_tab = (self.inv_tab+1)%4; self.inv_index=0; audio.play("hover",0.6)
+            self.inv_tab = (self.inv_tab+1)%4; self.inv_index=0; self.inv_scroll=0; audio.play("hover",0.6)
         elif event.key == pygame.K_UP:
-            self.inv_index = max(0, self.inv_index-1)
+            self.inv_index = max(0, self.inv_index-1); self._update_inv_scroll()
         elif event.key == pygame.K_DOWN:
             tabs=["hat","bag","glasses","cane"]
             key=tabs[self.inv_tab]
             owned = [it for it in config.SHOP_ITEMS[key] if it["id"] in self.save["owned_items"]]
-            self.inv_index = min(max(0,len(owned)-1), self.inv_index+1)
+            self.inv_index = min(max(0,len(owned)-1), self.inv_index+1); self._update_inv_scroll()
         elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
             tabs=["hat","bag","glasses","cane"]
             key=tabs[self.inv_tab]
@@ -920,6 +1166,7 @@ class Game:
                 else:
                     self.save[sel_key]=item["id"]
                 save_system.save_game(self.save)
+                self._sync_game_data_to_server()
                 audio.play("click")
 
     def handle_theme_keys(self, event):
@@ -936,6 +1183,7 @@ class Game:
         elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
             self.save["theme"] = config.THEMES[self.theme_index]["id"]
             save_system.save_game(self.save)
+            self._sync_game_data_to_server()
             audio.play("click")
 
     def handle_settings_keys(self, event):
@@ -1113,6 +1361,294 @@ class Game:
                 # sadece izin verilen karakterler
                 if ch not in ('\n','\r','\t'):
                     self.profile_nick_input += ch
+
+    def _reset_local_progression(self):
+        """Yeni hesap için local progression'ı temizle (server authoritative)."""
+        import copy as _copy
+        d = _copy.deepcopy(save_system.DEFAULT_SAVE)
+        # nickname/player_id/session hariç, sadece oyun verilerini sıfırla
+        for k in ["total_coins","best_distance","level","selected_character","selected_hat","selected_bag","selected_glasses","selected_cane","owned_items","theme","unlocked_characters","unlocked_levels","completed_levels","level_stars","current_level","final_completed","tutorial_done"]:
+            self.save[k] = d[k]
+        # settings ve nickname/player_id korunur (nickname yeni hesapta server'dan gelecek)
+        save_system.save_game(self.save)
+
+    def _build_server_game_data(self):
+        # server-authoritative progression (save.json sadece cache)
+        return {
+            "level": self.save.get("level", 1),
+            "current_level": self.save.get("current_level", 1),
+            "unlocked_levels": self.save.get("unlocked_levels", [1]),
+            "completed_levels": self.save.get("completed_levels", []),
+            "level_stars": self.save.get("level_stars", {}),
+            "unlocked_characters": self.save.get("unlocked_characters", ["cop_adam"]),
+            "selected_character": self.save.get("selected_character", "cop_adam"),
+            "total_coins": self.save.get("total_coins", 0),
+            "best_distance": self.save.get("best_distance", 0.0),
+            "owned_items": self.save.get("owned_items", []),
+            "selected_hat": self.save.get("selected_hat"),
+            "selected_bag": self.save.get("selected_bag"),
+            "selected_glasses": self.save.get("selected_glasses"),
+            "selected_cane": self.save.get("selected_cane"),
+            "theme": self.save.get("theme", "beyaz"),
+            "final_completed": self.save.get("final_completed", False),
+        }
+
+    def _sync_game_data_to_server(self, force=False):
+        # guest veya oturum yoksa atla, ağ yoksa çökme yok, her frame gönderme
+        if getattr(self, "guest_mode", False):
+            return
+        pid = str(self.save.get("player_id") or "").strip()
+        tok = str(self.save.get("session_token") or "").strip()
+        if not pid or not tok or not self.online_mgr:
+            return
+        # throttle 1.5 sn
+        import time as _time
+        now = _time.time()
+        if not force and hasattr(self, "_last_server_sync") and now - getattr(self, "_last_server_sync", 0) < 1.5:
+            self._pending_server_sync = True
+            return
+        try:
+            data = self._build_server_game_data()
+            # token/password loglama yok
+            self.online_mgr.save_game_data(data, pid, tok)
+            self._last_server_sync = now
+            self._pending_server_sync = False
+            # local cache güncelle
+            self.save["server_game_data"] = data
+        except:
+            # ağ yoksa sessiz
+            pass
+
+    # ---- Hesap sistemi FULL ----
+    def _do_account_register(self):
+        nick = self.account_nick.strip()
+        pw = self.account_pass
+        pw2 = self.account_pass2
+        if not self.online_mgr:
+            self.account_error = "Sunucuya bağlanılamadı."
+            return
+        # Yeni FULL sistem: eğer gate'den auto (nick boş) ise create_account_auto
+        is_auto = not nick
+        if is_auto:
+            # local progression temizle (yeni hesap temiz başlasın)
+            self._reset_local_progression()
+            ok, msg = self.online_mgr.create_account_auto(pw, pw2)
+        else:
+            ok, msg = self.online_mgr.account_register(nick, pw, pw2)
+        if ok:
+            self.account_error = ""
+            self.account_success_msg = f"Hesabın oluşturuldu! ID: {msg}"
+            audio.play("levelup")
+            # 1.5 sn sonra online menüye dön
+            self.state = "online_menu"
+            self._enter_online()
+        else:
+            self.account_error = msg
+            audio.play("death",0.4)
+
+    def _do_account_login(self):
+        pid = self.account_id_input.strip()
+        pw = self.account_login_pass
+        if not self.online_mgr:
+            self.account_error = "Sunucuya bağlanılamadı."
+            return
+        ok, msg = self.online_mgr.account_login(pid, pw)
+        if ok:
+            self.account_error = ""
+            self.account_success_msg = "Giriş başarılı!"
+            audio.play("levelup")
+            self.state = "online_menu"
+            self._enter_online()
+        else:
+            self.account_error = msg
+            audio.play("death",0.4)
+
+    def account_logout(self):
+        # sadece yerelde oturumu kapat, server'daki hesap silinmez
+        pid = str(self.save.get("player_id") or "").strip()
+        if self.online_mgr:
+            try:
+                self.online_mgr.account_logout(pid)
+            except:
+                pass
+        # yerelde session temizle — şifre zaten plain tutulmadı
+        self.save["player_id"] = None
+        self.save["nickname"] = None
+        save_system.save_game(self.save)
+        self.account_error = ""
+        self.account_success_msg = "Oturum kapatıldı."
+        self.state = "menu"
+        audio.play("click")
+
+    def handle_account_register_keys(self, event):
+        if event.key == pygame.K_ESCAPE:
+            self.state = "online_menu"
+            self.account_error = ""
+            return
+        elif event.key == pygame.K_TAB:
+            self.account_focus = (self.account_focus + 1) % 3
+            audio.play("hover",0.5)
+        elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            # Enter: odak ilerle veya son alandaysa gönder
+            if self.account_focus < 2:
+                self.account_focus += 1
+            else:
+                self._do_account_register()
+        elif event.key == pygame.K_BACKSPACE:
+            if self.account_focus == 0:
+                self.account_nick = self.account_nick[:-1]
+            elif self.account_focus == 1:
+                self.account_pass = self.account_pass[:-1]
+            else:
+                self.account_pass2 = self.account_pass2[:-1]
+        else:
+            ch = getattr(event, 'unicode', '')
+            if ch and ch.isprintable() and ch not in ('\n','\r','\t'):
+                if self.account_focus == 0 and len(self.account_nick) < 16:
+                    if ch.isalnum() or ch in "_ ":
+                        self.account_nick += ch
+                elif self.account_focus == 1 and len(self.account_pass) < 32:
+                    self.account_pass += ch
+                elif self.account_focus == 2 and len(self.account_pass2) < 32:
+                    self.account_pass2 += ch
+
+    def handle_account_login_keys(self, event):
+        if event.key == pygame.K_ESCAPE:
+            self.state = "online_menu"
+            self.account_error = ""
+            return
+        elif event.key == pygame.K_TAB:
+            self.account_focus = (self.account_focus + 1) % 2
+            audio.play("hover",0.5)
+        elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            if self.account_focus == 0:
+                self.account_focus = 1
+            else:
+                self._do_account_login()
+        elif event.key == pygame.K_BACKSPACE:
+            if self.account_focus == 0:
+                self.account_id_input = self.account_id_input[:-1]
+            else:
+                self.account_login_pass = self.account_login_pass[:-1]
+        else:
+            ch = getattr(event, 'unicode', '')
+            if ch and ch.isprintable() and ch not in ('\n','\r','\t'):
+                if self.account_focus == 0 and len(self.account_id_input) < 5 and ch.isdigit():
+                    self.account_id_input += ch
+                elif self.account_focus == 1 and len(self.account_login_pass) < 32:
+                    self.account_login_pass += ch
+
+    def _do_guest_login(self):
+        if not self.online_mgr:
+            self.guest_mode = True
+            self.guest_nick = f"guest_{random.randint(100000,999999):06d}"
+            self.save["nickname"] = self.guest_nick
+            self.save["player_id"] = f"guest_{random.randint(10000,99999):05d}"
+            self.state = "menu"
+            return
+        ok, data = self.online_mgr.guest_login()
+        if ok:
+            self.guest_mode = True
+            self.guest_nick = data.get("nickname")
+            # guest için local save'e kalıcı yazma yok, sadece memory
+            self.save["nickname"] = data.get("nickname")
+            self.save["player_id"] = data.get("player_id")
+            self.state = "menu"
+            audio.play("levelup")
+        else:
+            self.gate_error = data if isinstance(data, str) else "Guest hatası"
+            audio.play("death",0.4)
+
+    def _do_continue_remembered(self):
+        # server'dan doğrula ve game_data çek
+        if not self.remembered_summary:
+            self.state = "account_gate"
+            return
+        pid = self.remembered_summary.get("player_id")
+        tok = self.save.get("session_token") or (self.online_mgr.session_token if self.online_mgr else "")
+        if not pid or not tok:
+            # eski tarz hatırda (session yok) -> direkt menu, server'dan çekmeyi dene
+            self.state = "menu"
+            return
+        if self.online_mgr:
+            ok, resp = self.online_mgr.session_check(pid, tok)
+            if ok:
+                # game_data çek
+                ok2, gdata = self.online_mgr.get_game_data(pid, tok)
+                if ok2 and isinstance(gdata, dict):
+                    # server authoritative -> local save'e uygula (merge)
+                    for k,v in gdata.items():
+                        if k not in ("nickname","player_id","session_token"):
+                            self.save[k] = v
+                    save_system.save_game(self.save)
+                self.state = "menu"
+                audio.play("levelup")
+                return
+        # session geçersiz -> login ekranına
+        self.account_error = "Oturum geçersiz, tekrar giriş yapın"
+        self.state = "account_login"
+        self.account_focus = 0
+
+    def handle_account_gate_keys(self, event):
+        if event.key == pygame.K_UP:
+            self.gate_index = (self.gate_index - 1) % 3
+            audio.play("hover",0.5)
+        elif event.key == pygame.K_DOWN:
+            self.gate_index = (self.gate_index + 1) % 3
+            audio.play("hover",0.5)
+        elif event.key in (pygame.K_RETURN, pygame.K_SPACE, pygame.K_KP_ENTER):
+            if self.gate_index == 0:
+                # Hesap Oluştur -> auto nickname, sadece şifre
+                self.state = "account_register"
+                self.account_focus = 0
+                self.account_nick = ""
+                self.account_pass = ""
+                self.account_pass2 = ""
+                self.account_error = ""
+                audio.play("click")
+            elif self.gate_index == 1:
+                self.state = "account_login"
+                self.account_focus = 0
+                self.account_id_input = ""
+                self.account_login_pass = ""
+                self.account_error = ""
+                audio.play("click")
+            else:
+                self._do_guest_login()
+        elif event.key == pygame.K_ESCAPE:
+            # hesapsız oynada ESC yok, ama gate'de kal
+            pass
+
+    def handle_account_returning_keys(self, event):
+        if event.key == pygame.K_UP:
+            self.gate_index = (self.gate_index - 1) % 3
+            audio.play("hover",0.5)
+        elif event.key == pygame.K_DOWN:
+            self.gate_index = (self.gate_index + 1) % 3
+            audio.play("hover",0.5)
+        elif event.key in (pygame.K_RETURN, pygame.K_SPACE, pygame.K_KP_ENTER):
+            if self.gate_index == 0:
+                self._do_continue_remembered()
+            elif self.gate_index == 1:
+                # Yeni Hesap Oluştur -> eski hesabı bırak, yeni
+                self.remembered_summary = None
+                self.state = "account_register"
+                self.account_focus = 0
+                self.account_nick = ""
+                self.account_pass = ""
+                self.account_pass2 = ""
+                self.account_error = ""
+                audio.play("click")
+            else:
+                self.state = "account_login"
+                self.account_focus = 0
+                self.account_id_input = ""
+                self.account_login_pass = ""
+                self.account_error = ""
+                audio.play("click")
+        elif event.key == pygame.K_ESCAPE:
+            self.state = "account_gate"
+            audio.play("click")
 
     def handle_play_select_keys(self, event):
         if event.key == pygame.K_ESCAPE:
@@ -1467,6 +2003,13 @@ class Game:
                 else:
                     self.state = self.prev_state if self.prev_state in ("menu",) else "menu"
                 audio.play("click")
+                return
+            # Oturumu kapat (hesap varsa) — settings içinde
+            if self.save.get("player_id"):
+                logout_rect = pygame.Rect(card.x+14, card.y+340, card.width-28, 28)
+                if logout_rect.collidepoint(mx,my):
+                    self.account_logout()
+                    return
         elif self.state=="shop":
             # tab hit
             tabs = ["SAPKA","CANTA","GOZLUK","BASTON"]
@@ -1474,27 +2017,34 @@ class Game:
             for i in range(len(tabs)):
                 r=pygame.Rect(start_x+i*(tab_w+gap),68,tab_w,30)
                 if r.collidepoint(mx,my):
-                    self.shop_tab=i; self.shop_index=0; audio.play("click"); return
-            # liste item hit
+                    self.shop_tab=i; self.shop_index=0; self.shop_scroll=0; audio.play("click"); return
+            # liste item hit — viewport ile (scroll offset)
             lst,_ = self.current_shop_list()
             list_y=108
-            for idx in range(len(lst)):
-                y=list_y+idx*86; r=pygame.Rect(60,y,config.SCREEN_WIDTH-120,76)
-                if r.collidepoint(mx,my):
-                    self.shop_index=idx
-                    # çift tık gibi: satın al/kuşan
-                    lst2,key=self.current_shop_list()
-                    item=lst2[idx]
-                    owned=item["id"] in self.save["owned_items"]
-                    sel_key={"hat":"selected_hat","bag":"selected_bag","glasses":"selected_glasses","cane":"selected_cane"}[key]
+            scroll_top = self._get_shop_scroll_top(len(lst))
+            # viewport: sadece gorunen alan tiklanabilir
+            viewport = pygame.Rect(0, 108, config.SCREEN_WIDTH, config.SCREEN_HEIGHT-108)
+            if not viewport.collidepoint(mx,my):
+                pass
+            else:
+                for idx in range(len(lst)):
+                    y=list_y+(idx - scroll_top)*86; r=pygame.Rect(60,y,config.SCREEN_WIDTH-120,76)
+                    if r.collidepoint(mx,my):
+                        self.shop_index=idx
+                        self._update_shop_scroll()
+                        # çift tık gibi: satın al/kuşan
+                        lst2,key=self.current_shop_list()
+                        item=lst2[idx]
+                        owned=item["id"] in self.save["owned_items"]
+                        sel_key={"hat":"selected_hat","bag":"selected_bag","glasses":"selected_glasses","cane":"selected_cane"}[key]
                     if owned:
                         if self.save.get(sel_key)==item["id"]: self.save[sel_key]=None
                         else: self.save[sel_key]=item["id"]
-                        save_system.save_game(self.save); audio.play("click")
+                        save_system.save_game(self.save); self._sync_game_data_to_server(); audio.play("click")
                     else:
                         if self.save["total_coins"]>=item["price"]:
                             self.save["total_coins"]-=item["price"]; self.save["owned_items"].append(item["id"])
-                            self.save[sel_key]=item["id"]; save_system.save_game(self.save); audio.play("coin")
+                            self.save[sel_key]=item["id"]; save_system.save_game(self.save); self._sync_game_data_to_server(); audio.play("coin")
                     break
         elif self.state=="characters":
             n=len(config.CHARACTERS); cols=6 if n>12 else 3
@@ -1510,7 +2060,7 @@ class Game:
                 if r.collidepoint(mx,my):
                     self.char_index=idx
                     if ch["id"] in self.save["unlocked_characters"]:
-                        self.save["selected_character"]=ch["id"]; save_system.save_game(self.save); audio.play("click")
+                        self.save["selected_character"]=ch["id"]; save_system.save_game(self.save); self._sync_game_data_to_server(); audio.play("click")
                     else: audio.play("death",0.4)
                     break
         elif self.state=="inventory":
@@ -1519,20 +2069,24 @@ class Game:
             for i in range(len(tabs)):
                 r=pygame.Rect(start_x+i*(tab_w+gap),68,tab_w,28)
                 if r.collidepoint(mx,my):
-                    self.inv_tab=i; self.inv_index=0; audio.play("click"); return
+                    self.inv_tab=i; self.inv_index=0; self.inv_scroll=0; audio.play("click"); return
             tabs_key=["hat","bag","glasses","cane"]
             key=tabs_key[self.inv_tab]
             owned=[it for it in config.SHOP_ITEMS[key] if it["id"] in self.save["owned_items"]]
             list_y=108
-            for idx,item in enumerate(owned):
-                y=list_y+idx*84; r=pygame.Rect(60,y,config.SCREEN_WIDTH-120,74)
-                if r.collidepoint(mx,my):
-                    self.inv_index=idx
-                    sel_key={"hat":"selected_hat","bag":"selected_bag","glasses":"selected_glasses","cane":"selected_cane"}[key]
-                    if self.save.get(sel_key)==item["id"]: self.save[sel_key]=None
-                    else: self.save[sel_key]=item["id"]
-                    save_system.save_game(self.save); audio.play("click")
-                    break
+            scroll_top = self._get_inv_scroll_top(len(owned))
+            viewport = pygame.Rect(0, 108, config.SCREEN_WIDTH, config.SCREEN_HEIGHT-108)
+            if viewport.collidepoint(mx,my):
+                for idx,item in enumerate(owned):
+                    y=list_y+(idx - scroll_top)*84; r=pygame.Rect(60,y,config.SCREEN_WIDTH-120,74)
+                    if r.collidepoint(mx,my):
+                        self.inv_index=idx
+                        self._update_inv_scroll()
+                        sel_key={"hat":"selected_hat","bag":"selected_bag","glasses":"selected_glasses","cane":"selected_cane"}[key]
+                        if self.save.get(sel_key)==item["id"]: self.save[sel_key]=None
+                        else: self.save[sel_key]=item["id"]
+                        save_system.save_game(self.save); self._sync_game_data_to_server(); audio.play("click")
+                        break
         elif self.state=="themes":
             cols=4; card_w,card_h=190,108; gap_x,gap_y=18,16
             start_x=config.SCREEN_WIDTH//2 - (cols*card_w+(cols-1)*gap_x)//2; start_y=88
@@ -1541,7 +2095,7 @@ class Game:
                 x=start_x+col*(card_w+gap_x); y=start_y+row*(card_h+gap_y)
                 r=pygame.Rect(x,y,card_w,card_h)
                 if r.collidepoint(mx,my):
-                    self.theme_index=idx; self.save["theme"]=t["id"]; save_system.save_game(self.save); audio.play("click"); break
+                    self.theme_index=idx; self.save["theme"]=t["id"]; save_system.save_game(self.save); self._sync_game_data_to_server(); audio.play("click"); break
         elif self.state=="levels":
             cols=4; card_w,card_h=190,92; gap_x,gap_y=14,12
             start_x=config.SCREEN_WIDTH//2 - (cols*card_w+(cols-1)*gap_x)//2; start_y=88
@@ -1587,6 +2141,37 @@ class Game:
                 self._try_create_profile()
             elif inp.collidepoint(mx,my):
                 pass  # focus (klavye zaten aktif)
+        elif self.state=="account_register":
+            box = pygame.Rect(config.SCREEN_WIDTH//2-260, config.SCREEN_HEIGHT//2-160, 520, 360)
+            inp_nick = pygame.Rect(box.x+30, box.y+70, box.width-60, 42)
+            inp_pw = pygame.Rect(box.x+30, box.y+130, box.width-60, 42)
+            inp_pw2 = pygame.Rect(box.x+30, box.y+190, box.width-60, 42)
+            btn = pygame.Rect(box.centerx-110, box.y+260, 220, 44)
+            btn_back = pygame.Rect(box.x+20, box.y+320, 100, 30)
+            if inp_nick.collidepoint(mx,my):
+                self.account_focus=0; audio.play("hover",0.3)
+            elif inp_pw.collidepoint(mx,my):
+                self.account_focus=1; audio.play("hover",0.3)
+            elif inp_pw2.collidepoint(mx,my):
+                self.account_focus=2; audio.play("hover",0.3)
+            elif btn.collidepoint(mx,my):
+                self._do_account_register()
+            elif btn_back.collidepoint(mx,my):
+                self.state="online_menu"; audio.play("click")
+        elif self.state=="account_login":
+            box = pygame.Rect(config.SCREEN_WIDTH//2-260, config.SCREEN_HEIGHT//2-150, 520, 320)
+            inp_id = pygame.Rect(box.x+30, box.y+80, box.width-60, 44)
+            inp_pw = pygame.Rect(box.x+30, box.y+145, box.width-60, 44)
+            btn = pygame.Rect(box.centerx-110, box.y+220, 220, 44)
+            btn_back = pygame.Rect(box.x+20, box.y+280, 100, 30)
+            if inp_id.collidepoint(mx,my):
+                self.account_focus=0; audio.play("hover",0.3)
+            elif inp_pw.collidepoint(mx,my):
+                self.account_focus=1; audio.play("hover",0.3)
+            elif btn.collidepoint(mx,my):
+                self._do_account_login()
+            elif btn_back.collidepoint(mx,my):
+                self.state="online_menu"; audio.play("click")
         elif self.state=="play_select":
             for i in range(3):
                 y = 132 + i*86
@@ -1623,6 +2208,21 @@ class Game:
                 mbtn = pygame.Rect(box.x+24, box.bottom-48, box.width-48, 36)
                 if mbtn.collidepoint(mx,my):
                     self.send_invite()
+            # Hesap oluştur / Giriş yap (AŞAMA 1)
+            btn_reg = pygame.Rect(box.x+24, box.bottom-90, 240, 32)
+            btn_login = pygame.Rect(box.x+280, box.bottom-90, 216, 32)
+            if btn_reg.collidepoint(mx,my):
+                self.state="account_register"; self.account_focus=0; self.account_nick=""; self.account_pass=""; self.account_pass2=""; self.account_error=""; audio.play("click")
+                return
+            elif btn_login.collidepoint(mx,my):
+                self.state="account_login"; self.account_focus=0; self.account_id_input=""; self.account_login_pass=""; self.account_error=""; audio.play("click")
+                return
+            # Oturumu kapat (giriş yapılmışsa)
+            if self.save.get("player_id"):
+                btn_logout = pygame.Rect(box.x+24, box.bottom-125, box.width-48, 28)
+                if btn_logout.collidepoint(mx,my):
+                    self.account_logout()
+                    return
         elif self.state=="lobby":
             # HAZIR ve AYRIL butonları
             box = pygame.Rect(config.SCREEN_WIDTH//2-240, config.SCREEN_HEIGHT//2-110, 480, 260)
@@ -1758,6 +2358,10 @@ class Game:
                 self.draw_ending(surf, theme)
             elif self.state=="profile_create":
                 self.draw_profile(surf, theme)
+            elif self.state=="account_register":
+                self.draw_account_register(surf, theme)
+            elif self.state=="account_login":
+                self.draw_account_login(surf, theme)
             elif self.state=="play_select":
                 self.draw_play_select(surf, theme)
             elif self.state=="online_menu":
@@ -2231,8 +2835,16 @@ class Game:
             surf.blit(txt, (r.centerx - txt.get_width()//2, r.centery - txt.get_height()//2))
         lst,key = self.current_shop_list()
         list_y=108
+        # viewport + clip
+        viewport = pygame.Rect(58, 108, config.SCREEN_WIDTH-116, config.SCREEN_HEIGHT-128)
+        prev_clip = surf.get_clip()
+        surf.set_clip(viewport)
+        scroll_top = self._get_shop_scroll_top(len(lst))
         for idx,item in enumerate(lst):
-            y=list_y+idx*86
+            y=list_y+(idx - scroll_top)*86
+            # viewport dışı atla
+            if y < viewport.y - 76 or y > viewport.bottom:
+                continue
             r=pygame.Rect(60, y, config.SCREEN_WIDTH-120, 76)
             sel=idx==self.shop_index
             # shadow + bevel polish
@@ -2251,8 +2863,7 @@ class Game:
             pygame.draw.rect(surf, (242,242,245), icon_r, border_radius=9)
             pygame.draw.rect(surf, (0,0,0,120), icon_r, width=1, border_radius=9)
             gfx.draw_glow(surf, icon_r.center, 10, (255,215,0), 14 if item["id"] in self.save["owned_items"] else 6)
-            ic=self.font_big.render(item["icon"], True, (28,28,30))
-            surf.blit(ic, (icon_r.centerx-ic.get_width()//2, icon_r.centery-ic.get_height()//2))
+            self._draw_item_preview(surf, icon_r, key, item["id"])
             name=self.font_med.render(item["name"], True, (18,18,22) if theme["id"] not in ("siyah","kirmizi_siyah","siyah_mavi","mor_mavi") else (238,238,242))
             surf.blit(name, (r.x+80, r.y+14))
             owned=item["id"] in self.save["owned_items"]
@@ -2281,6 +2892,16 @@ class Game:
                     # tiny coin icon
                     pygame.draw.circle(surf,(255,215,0),(r.x+82+self.font_small.size(can)[0]+10, r.y+48),5)
                     pygame.draw.circle(surf,(255,165,0),(r.x+82+self.font_small.size(can)[0]+10, r.y+48),5,1)
+        surf.set_clip(prev_clip)
+        # scrollbar
+        if len(lst) > 6:
+            bar_h = viewport.height
+            thumb_h = max(24, int(bar_h * 6 / len(lst)))
+            thumb_y = viewport.y + int((scroll_top / max(1, len(lst)-6)) * (bar_h - thumb_h))
+            bar_rect = pygame.Rect(viewport.right - 8, viewport.y, 6, bar_h)
+            thumb_rect = pygame.Rect(viewport.right - 8, thumb_y, 6, thumb_h)
+            pygame.draw.rect(surf, (0,0,0,60), bar_rect, border_radius=3)
+            pygame.draw.rect(surf, (255,215,0), thumb_rect, border_radius=3)
 
     def draw_characters(self, surf, theme):
         surf.fill(theme["bg"])
@@ -2373,8 +2994,14 @@ class Game:
             surf.blit(tip, (config.SCREEN_WIDTH//2 - tip.get_width()//2, 250))
         else:
             list_y=108
+            viewport = pygame.Rect(58, 108, config.SCREEN_WIDTH-116, config.SCREEN_HEIGHT-128)
+            prev_clip = surf.get_clip()
+            surf.set_clip(viewport)
+            scroll_top = self._get_inv_scroll_top(len(owned))
             for idx,item in enumerate(owned):
-                y=list_y+idx*84
+                y=list_y+(idx - scroll_top)*84
+                if y < viewport.y - 74 or y > viewport.bottom:
+                    continue
                 r=pygame.Rect(60,y,config.SCREEN_WIDTH-120,74)
                 sel=idx==self.inv_index
                 col=(255,255,210) if sel else (255,255,255)
@@ -2386,13 +3013,21 @@ class Game:
                 icon_r=pygame.Rect(r.x+12,r.y+10,54,54)
                 pygame.draw.rect(surf,(240,240,240),icon_r,border_radius=8)
                 pygame.draw.rect(surf,(0,0,0),icon_r,width=1,border_radius=8)
-                ic=self.font_big.render(item["icon"], True, (0,0,0))
-                surf.blit(ic, (icon_r.centerx-ic.get_width()//2, icon_r.centery-ic.get_height()//2))
+                self._draw_item_preview(surf, icon_r, key, item["id"])
                 name=self.font_med.render(item["name"], True, (0,0,0) if theme["id"] not in ("siyah","kirmizi_siyah","siyah_mavi","mor_mavi") else (255,255,255))
                 surf.blit(name, (r.x+80,r.y+14))
                 using=self.save.get(sel_key)==item["id"]
                 st=self.font_small.render("● KULLANILIYOR" if using else "ENTER ile Kuşan", True, (0,150,0) if using else (90,90,90))
                 surf.blit(st, (r.x+80,r.y+40))
+            surf.set_clip(prev_clip)
+            if len(owned) > 6:
+                bar_h = viewport.height
+                thumb_h = max(24, int(bar_h * 6 / len(owned)))
+                thumb_y = viewport.y + int((scroll_top / max(1, len(owned)-6)) * (bar_h - thumb_h))
+                bar_rect = pygame.Rect(viewport.right - 8, viewport.y, 6, bar_h)
+                thumb_rect = pygame.Rect(viewport.right - 8, thumb_y, 6, thumb_h)
+                pygame.draw.rect(surf, (0,0,0,60), bar_rect, border_radius=3)
+                pygame.draw.rect(surf, (255,215,0), thumb_rect, border_radius=3)
 
     def draw_themes(self, surf, theme):
         surf.fill(theme["bg"])
@@ -2494,6 +3129,15 @@ class Game:
         if is_back_sel: pygame.draw.rect(surf, (255,215,0), back, width=3, border_radius=8)
         btxt = self.font_med.render("GERİ (ESC)", True, (0,0,0))
         surf.blit(btxt, (back.centerx - btxt.get_width()//2, back.centery - btxt.get_height()//2))
+        # oturumu kapat (hesap varsa)
+        if self.save.get("player_id"):
+            logout_rect = pygame.Rect(card.x+14, card.y+340, card.width-28, 28)
+            hover2 = logout_rect.collidepoint(pygame.mouse.get_pos())
+            pygame.draw.rect(surf, (160,40,40) if hover2 else (120,30,30), logout_rect, border_radius=8)
+            pygame.draw.rect(surf, (0,0,0), logout_rect, width=1, border_radius=8)
+            if hover2: pygame.draw.rect(surf, (255,215,0), logout_rect, width=2, border_radius=8)
+            lt = self.font_small.render("OTURUMU KAPAT", True, (255,255,255))
+            surf.blit(lt, (logout_rect.centerx - lt.get_width()//2, logout_rect.centery - lt.get_height()//2))
         # alt bilgi
         info = self.font_tiny.render("Ayarlar save.json'a kaydedilir — eksik dosya olursa varsayılana dönülür.", True, theme["hud"])
         surf.blit(info, (config.SCREEN_WIDTH//2 - info.get_width()//2, config.SCREEN_HEIGHT-22))
@@ -2739,6 +3383,213 @@ class Game:
         hint = self.font_tiny.render("ENTER ile onayla  •  ID kalıcı ve 5 rakamdan oluşur", True, theme["hud"])
         surf.blit(hint, (box.centerx - hint.get_width()//2, box.bottom+16))
 
+    def draw_account_register(self, surf, theme):
+        gfx.vertical_gradient(surf, tuple(min(255,c+18) for c in theme["bg"]), tuple(max(0,c-14) for c in theme["bg"]))
+        gfx.draw_vignette(surf, intensity=0.18)
+        box = pygame.Rect(config.SCREEN_WIDTH//2-260, config.SCREEN_HEIGHT//2-160, 520, 360)
+        gfx.draw_soft_shadow(surf, box, radius=18, alpha=48)
+        gfx.glass_panel(surf, box, fill=(255,255,255,242), border=(0,0,0,110), radius=16)
+        pygame.draw.rect(surf, (255,215,0), pygame.Rect(box.x, box.y, box.width, 6), border_radius=4)
+        title = self.font_big.render("HESAP OLUŞTUR", True, (18,18,20))
+        surf.blit(title, (box.centerx - title.get_width()//2, box.y+16))
+        sub = self.font_small.render("Nickname ve şifre ile kalıcı hesap", True, (90,90,96))
+        surf.blit(sub, (box.centerx - sub.get_width()//2, box.y+44))
+        labels = ["Nickname", "Şifre", "Şifre Tekrar"]
+        vals = [self.account_nick, "*" * len(self.account_pass), "*" * len(self.account_pass2)]
+        reals = [self.account_nick, self.account_pass, self.account_pass2]
+        for i, (lbl, val) in enumerate(zip(labels, vals)):
+            y = box.y + 70 + i*60
+            l = self.font_small.render(lbl, True, (30,30,34))
+            surf.blit(l, (box.x+30, y-16))
+            inp = pygame.Rect(box.x+30, y, box.width-60, 42)
+            is_focus = self.account_focus == i
+            pygame.draw.rect(surf, (255,255,255), inp, border_radius=10)
+            pygame.draw.rect(surf, (255,215,0) if is_focus else (0,0,0), inp, width=2, border_radius=10)
+            show = reals[i] if i==0 else "*" * len(reals[i])
+            if is_focus:
+                show += "|" if (pygame.time.get_ticks()//520)%2==0 else ""
+            t_surf = self.font_med.render(show, True, (0,0,0))
+            surf.blit(t_surf, (inp.x+14, inp.centery - t_surf.get_height()//2))
+            if not reals[i] and not is_focus:
+                ph = self.font_small.render("gir", True, (150,150,150))
+                surf.blit(ph, (inp.x+14, inp.centery - ph.get_height()//2))
+        if self.account_error:
+            err = self.font_small.render(self.account_error, True, (200,30,30))
+            surf.blit(err, (box.centerx - err.get_width()//2, box.y+250))
+        btn = pygame.Rect(box.centerx-110, box.y+272, 220, 44)
+        hover = btn.collidepoint(pygame.mouse.get_pos())
+        gfx.draw_soft_shadow(surf, btn, radius=10, alpha=22 if hover else 14)
+        col = (255,215,0) if hover else (30,30,36)
+        top = (255,228,110) if hover else (58,58,64)
+        btn_s = pygame.Surface((btn.width, btn.height), pygame.SRCALPHA)
+        for yy in range(btn.height):
+            ts=yy/btn.height
+            rr=int(top[0]*(1-ts)+col[0]*ts); gg=int(top[1]*(1-ts)+col[1]*ts); bb=int(top[2]*(1-ts)+col[2]*ts)
+            pygame.draw.line(btn_s,(rr,gg,bb),(0,yy),(btn.width,yy))
+        mask = pygame.Surface((btn.width,btn.height), pygame.SRCALPHA)
+        pygame.draw.rect(mask,(255,255,255),(0,0,btn.width,btn.height), border_radius=10)
+        btn_s.blit(mask,(0,0), special_flags=pygame.BLEND_RGBA_MULT)
+        surf.blit(btn_s, btn.topleft)
+        pygame.draw.rect(surf, (255,215,0) if hover else (0,0,0), btn, width=2, border_radius=10)
+        txt2 = self.font_med.render("OLUŞTUR", True, (0,0,0) if hover else (255,255,255))
+        surf.blit(txt2, (btn.centerx - txt2.get_width()//2, btn.centery - txt2.get_height()//2))
+        back = pygame.Rect(box.x+20, box.y+320, 100, 30)
+        hover2 = back.collidepoint(pygame.mouse.get_pos())
+        pygame.draw.rect(surf, (200,200,200) if hover2 else (230,230,230), back, border_radius=8)
+        pygame.draw.rect(surf, (0,0,0), back, width=1, border_radius=8)
+        bt = self.font_small.render("GERİ", True, (30,30,30))
+        surf.blit(bt, (back.centerx - bt.get_width()//2, back.centery - bt.get_height()//2))
+        hint = self.font_tiny.render("TAB ile alan değiştir • ENTER ile gönder • ESC geri", True, theme["hud"])
+        surf.blit(hint, (box.centerx - hint.get_width()//2, box.bottom+14))
+
+    def draw_account_login(self, surf, theme):
+        gfx.vertical_gradient(surf, tuple(min(255,c+18) for c in theme["bg"]), tuple(max(0,c-14) for c in theme["bg"]))
+        gfx.draw_vignette(surf, intensity=0.18)
+        box = pygame.Rect(config.SCREEN_WIDTH//2-260, config.SCREEN_HEIGHT//2-150, 520, 320)
+        gfx.draw_soft_shadow(surf, box, radius=18, alpha=48)
+        gfx.glass_panel(surf, box, fill=(255,255,255,242), border=(0,0,0,110), radius=16)
+        pygame.draw.rect(surf, (255,215,0), pygame.Rect(box.x, box.y, box.width, 6), border_radius=4)
+        title = self.font_big.render("GİRİŞ YAP", True, (18,18,20))
+        surf.blit(title, (box.centerx - title.get_width()//2, box.y+16))
+        sub = self.font_small.render("Oyuncu ID ve şifre ile giriş", True, (90,90,96))
+        surf.blit(sub, (box.centerx - sub.get_width()//2, box.y+44))
+        labels = ["Oyuncu ID (5 rakam)", "Şifre"]
+        vals = [self.account_id_input, "*" * len(self.account_login_pass)]
+        reals = [self.account_id_input, self.account_login_pass]
+        for i, (lbl, val) in enumerate(zip(labels, vals)):
+            y = box.y + 80 + i*65
+            l = self.font_small.render(lbl, True, (30,30,34))
+            surf.blit(l, (box.x+30, y-16))
+            inp = pygame.Rect(box.x+30, y, box.width-60, 44)
+            is_focus = self.account_focus == i
+            pygame.draw.rect(surf, (255,255,255), inp, border_radius=10)
+            pygame.draw.rect(surf, (255,215,0) if is_focus else (0,0,0), inp, width=2, border_radius=10)
+            show = reals[i] if i==0 else "*" * len(reals[i])
+            if is_focus:
+                show += "|" if (pygame.time.get_ticks()//520)%2==0 else ""
+            t_surf = self.font_med.render(show, True, (0,0,0))
+            surf.blit(t_surf, (inp.x+14, inp.centery - t_surf.get_height()//2))
+        if self.account_error:
+            err = self.font_small.render(self.account_error, True, (200,30,30))
+            surf.blit(err, (box.centerx - err.get_width()//2, box.y+215))
+        btn = pygame.Rect(box.centerx-110, box.y+235, 220, 44)
+        hover = btn.collidepoint(pygame.mouse.get_pos())
+        gfx.draw_soft_shadow(surf, btn, radius=10, alpha=22 if hover else 14)
+        col = (255,215,0) if hover else (30,30,36)
+        top = (255,228,110) if hover else (58,58,64)
+        btn_s = pygame.Surface((btn.width, btn.height), pygame.SRCALPHA)
+        for yy in range(btn.height):
+            ts=yy/btn.height
+            rr=int(top[0]*(1-ts)+col[0]*ts); gg=int(top[1]*(1-ts)+col[1]*ts); bb=int(top[2]*(1-ts)+col[2]*ts)
+            pygame.draw.line(btn_s,(rr,gg,bb),(0,yy),(btn.width,yy))
+        mask = pygame.Surface((btn.width,btn.height), pygame.SRCALPHA)
+        pygame.draw.rect(mask,(255,255,255),(0,0,btn.width,btn.height), border_radius=10)
+        btn_s.blit(mask,(0,0), special_flags=pygame.BLEND_RGBA_MULT)
+        surf.blit(btn_s, btn.topleft)
+        pygame.draw.rect(surf, (255,215,0) if hover else (0,0,0), btn, width=2, border_radius=10)
+        txt2 = self.font_med.render("GİRİŞ", True, (0,0,0) if hover else (255,255,255))
+        surf.blit(txt2, (btn.centerx - txt2.get_width()//2, btn.centery - txt2.get_height()//2))
+        back = pygame.Rect(box.x+20, box.y+280, 100, 30)
+        hover2 = back.collidepoint(pygame.mouse.get_pos())
+        pygame.draw.rect(surf, (200,200,200) if hover2 else (230,230,230), back, border_radius=8)
+        pygame.draw.rect(surf, (0,0,0), back, width=1, border_radius=8)
+        bt = self.font_small.render("GERİ", True, (30,30,30))
+        surf.blit(bt, (back.centerx - bt.get_width()//2, back.centery - bt.get_height()//2))
+        hint = self.font_tiny.render("TAB ile alan değiştir • ENTER ile gönder • ESC geri", True, theme["hud"])
+        surf.blit(hint, (box.centerx - hint.get_width()//2, box.bottom+14))
+
+    def draw_account_gate(self, surf, theme):
+        gfx.vertical_gradient(surf, tuple(min(255,c+18) for c in theme["bg"]), tuple(max(0,c-14) for c in theme["bg"]))
+        gfx.draw_vignette(surf, intensity=0.22)
+        title = self.font_huge.render("FREEFALL", True, theme["hud"])
+        surf.blit(title, (config.SCREEN_WIDTH//2 - title.get_width()//2, 30))
+        sub = self.font_small.render("Hesabınla oyna, ilerlemen kalıcı kalsın", True, theme["hud"])
+        surf.blit(sub, (config.SCREEN_WIDTH//2 - sub.get_width()//2, 78))
+        opts = ["HESAP OLUŞTUR", "GİRİŞ YAP", "HESAPSIZ OYNA"]
+        descs = ["Otomatik nickname + şifre ile yeni hesap", "ID veya nickname + şifre", "Geçici guest, ilerleme kalıcı değil"]
+        mx,my = pygame.mouse.get_pos()
+        for i, (label, desc) in enumerate(zip(opts, descs)):
+            y = 140 + i*86
+            r = pygame.Rect(config.SCREEN_WIDTH//2-200, y, 400, 68)
+            sel = i==self.gate_index
+            hover = r.collidepoint(mx,my)
+            gfx.draw_soft_shadow(surf, r, radius=12, alpha=22 if sel or hover else 14)
+            base = theme["button"]
+            top = (255,228,110) if sel else tuple(min(255,c+14) for c in base)
+            bot = (255,185,0) if sel else tuple(max(0,c-10) for c in base)
+            btn_s = pygame.Surface((r.width, r.height), pygame.SRCALPHA)
+            for yy in range(r.height):
+                ts=yy/r.height
+                rr=int(top[0]*(1-ts)+bot[0]*ts); gg=int(top[1]*(1-ts)+bot[1]*ts); bb=int(top[2]*(1-ts)+bot[2]*ts)
+                pygame.draw.line(btn_s,(rr,gg,bb),(0,yy),(r.width,yy))
+            mask = pygame.Surface((r.width, r.height), pygame.SRCALPHA)
+            pygame.draw.rect(mask,(255,255,255),(0,0,r.width,r.height), border_radius=12)
+            btn_s.blit(mask,(0,0), special_flags=pygame.BLEND_RGBA_MULT)
+            surf.blit(btn_s, r.topleft)
+            pygame.draw.rect(surf, (255,215,0) if sel else (0,0,0), r, width=3 if sel else 2, border_radius=12)
+            t1 = self.font_big.render(label, True, (28,18,4) if sel else (0,0,0) if theme["id"]=="beyaz" else (255,255,255))
+            surf.blit(t1, (r.centerx - t1.get_width()//2, r.y+14))
+            t2 = self.font_tiny.render(desc, True, (60,60,64) if sel else (90,90,90))
+            surf.blit(t2, (r.centerx - t2.get_width()//2, r.y+42))
+        hint = self.font_tiny.render("↑↓ Seç  •  ENTER Onayla  •  Hesap server'da kalıcı", True, theme["hud"])
+        surf.blit(hint, (config.SCREEN_WIDTH//2 - hint.get_width()//2, config.SCREEN_HEIGHT-22))
+        if self.gate_error:
+            err = self.font_small.render(self.gate_error, True, (200,30,30))
+            surf.blit(err, (config.SCREEN_WIDTH//2 - err.get_width()//2, 410))
+
+    def draw_account_returning(self, surf, theme):
+        gfx.vertical_gradient(surf, tuple(min(255,c+18) for c in theme["bg"]), tuple(max(0,c-14) for c in theme["bg"]))
+        gfx.draw_vignette(surf, intensity=0.22)
+        title = self.font_huge.render("FREEFALL", True, theme["hud"])
+        surf.blit(title, (config.SCREEN_WIDTH//2 - title.get_width()//2, 24))
+        sub = self.font_small.render("Seni hatırlıyoruz. 👋", True, theme["hud"])
+        surf.blit(sub, (config.SCREEN_WIDTH//2 - sub.get_width()//2, 70))
+        # remembered card
+        nick = self.remembered_summary.get("nickname","?") if self.remembered_summary else "?"
+        pid = self.remembered_summary.get("player_id","?????") if self.remembered_summary else "?????"
+        # try to get game_data for level/coins if available via save
+        lvl = self.save.get("level",1)
+        coins = self.save.get("total_coins",0)
+        # if server summary available, use it
+        if self.remembered_summary and "level" in self.remembered_summary:
+            lvl = self.remembered_summary.get("level", lvl)
+            coins = self.remembered_summary.get("total_coins", coins)
+        card = pygame.Rect(config.SCREEN_WIDTH//2-200, 100, 400, 90)
+        gfx.draw_soft_shadow(surf, card, radius=12, alpha=32)
+        gfx.glass_panel(surf, card, fill=(255,255,255,242), border=(0,0,0,110), radius=14)
+        pygame.draw.rect(surf, (255,215,0), pygame.Rect(card.x, card.y, card.width, 5), border_radius=4)
+        t1 = self.font_big.render(nick, True, (20,20,30))
+        surf.blit(t1, (card.centerx - t1.get_width()//2, card.y+12))
+        t2 = self.font_small.render(f"ID: {pid}  •  Seviye: {lvl}  •  Coin: {coins}", True, (80,80,90))
+        surf.blit(t2, (card.centerx - t2.get_width()//2, card.y+48))
+        t3 = self.font_tiny.render("Daha önce bu cihazda oynadın", True, (100,100,110))
+        surf.blit(t3, (card.centerx - t3.get_width()//2, card.y+68))
+        opts = ["ESKİ HESABA DEVAM ET", "YENİ HESAP OLUŞTUR", "BAŞKA HESAPLA GİRİŞ YAP"]
+        mx,my = pygame.mouse.get_pos()
+        for i,label in enumerate(opts):
+            y = 210 + i*78
+            r = pygame.Rect(config.SCREEN_WIDTH//2-220, y, 440, 62)
+            sel = i==self.gate_index
+            hover = r.collidepoint(mx,my)
+            gfx.draw_soft_shadow(surf, r, radius=12, alpha=22 if sel or hover else 14)
+            base = theme["button"]
+            top = (255,228,110) if sel else tuple(min(255,c+14) for c in base)
+            bot = (255,185,0) if sel else tuple(max(0,c-10) for c in base)
+            btn_s = pygame.Surface((r.width, r.height), pygame.SRCALPHA)
+            for yy in range(r.height):
+                ts=yy/r.height
+                rr=int(top[0]*(1-ts)+bot[0]*ts); gg=int(top[1]*(1-ts)+bot[1]*ts); bb=int(top[2]*(1-ts)+bot[2]*ts)
+                pygame.draw.line(btn_s,(rr,gg,bb),(0,yy),(r.width,yy))
+            mask = pygame.Surface((r.width, r.height), pygame.SRCALPHA)
+            pygame.draw.rect(mask,(255,255,255),(0,0,r.width,r.height), border_radius=12)
+            btn_s.blit(mask,(0,0), special_flags=pygame.BLEND_RGBA_MULT)
+            surf.blit(btn_s, r.topleft)
+            pygame.draw.rect(surf, (255,215,0) if sel else (0,0,0), r, width=3 if sel else 2, border_radius=12)
+            t = self.font_med.render(label, True, (28,18,4) if sel else (0,0,0) if theme["id"]=="beyaz" else (255,255,255))
+            surf.blit(t, (r.centerx - t.get_width()//2, r.centery - t.get_height()//2))
+        hint = self.font_tiny.render("↑↓ Seç  •  ENTER Onayla  •  Hesap server'da kalıcı, oyun silinse bile", True, theme["hud"])
+        surf.blit(hint, (config.SCREEN_WIDTH//2 - hint.get_width()//2, config.SCREEN_HEIGHT-22))
+
     def draw_play_select(self, surf, theme):
         gfx.vertical_gradient(surf, tuple(min(255,c+18) for c in theme["bg"]), tuple(max(0,c-14) for c in theme["bg"]))
         gfx.draw_vignette(surf, intensity=0.16)
@@ -2872,6 +3723,31 @@ class Game:
             txt_inv = "DAVET GÖNDERİLDİ" if is_sent else "DAVET ET"
             t5 = self.font_med.render(txt_inv, True, (255,255,255))
             surf.blit(t5, (mbtn.centerx - t5.get_width()//2, mbtn.centery - t5.get_height()//2))
+        # Hesap oluştur / Giriş yap (AŞAMA 1)
+        btn_reg = pygame.Rect(box.x+24, box.bottom-90, 240, 32)
+        btn_login = pygame.Rect(box.x+280, box.bottom-90, 216, 32)
+        for b, txt_str in [(btn_reg, "HESAP OLUŞTUR"), (btn_login, "GİRİŞ YAP")]:
+            hover = b.collidepoint(mx,my)
+            col = (90,80,200) if hover else (70,60,160) if b==btn_reg else (70,160,90) if hover else (50,120,70)
+            # basit renk
+            if b==btn_reg:
+                col = (100,90,220) if hover else (80,70,180)
+            else:
+                col = (90,180,110) if hover else (70,140,90)
+            pygame.draw.rect(surf, col, b, border_radius=8)
+            pygame.draw.rect(surf, (0,0,0), b, width=1, border_radius=8)
+            if hover: pygame.draw.rect(surf, (255,215,0), b, width=2, border_radius=8)
+            t = self.font_small.render(txt_str, True, (255,255,255))
+            surf.blit(t, (b.centerx - t.get_width()//2, b.centery - t.get_height()//2))
+        # Oturumu kapat (giriş yapılmışsa)
+        if self.save.get("player_id"):
+            btn_logout = pygame.Rect(box.x+24, box.bottom-125, box.width-48, 28)
+            hover3 = btn_logout.collidepoint(mx,my)
+            pygame.draw.rect(surf, (160,40,40) if hover3 else (120,30,30), btn_logout, border_radius=8)
+            pygame.draw.rect(surf, (0,0,0), btn_logout, width=1, border_radius=8)
+            if hover3: pygame.draw.rect(surf, (255,215,0), btn_logout, width=2, border_radius=8)
+            t6 = self.font_small.render("OTURUMU KAPAT", True, (255,255,255))
+            surf.blit(t6, (btn_logout.centerx - t6.get_width()//2, btn_logout.centery - t6.get_height()//2))
         hint2 = self.font_tiny.render("ESC Geri  •  Sadece rakam gir (5 hane)", True, theme["hud"])
         surf.blit(hint2, (config.SCREEN_WIDTH//2 - hint2.get_width()//2, box.bottom+14))
 
