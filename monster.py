@@ -131,6 +131,19 @@ class Monster:
             return True
         return False
 
+    def check_catch_vs(self, entity):
+        """VS_BOT için — global caught flag'ini kirletmeden kontrol (deterministik)."""
+        pr = entity.rect
+        mr = self.get_rect()
+        if mr.colliderect(pr):
+            if abs((self.y + self.h) - (entity.y + entity.h//2)) < 64:
+                return True
+            if self.y + self.h//2 >= entity.y + 8 and abs(self.x - entity.x) < 38:
+                return True
+        if entity.y - self.y < 36 and abs(self.x - entity.x) < 40:
+            return True
+        return False
+
     def draw(self, surf, cam_y):
         lvl = self.level_name
         theme = MONSTER_THEMES.get(lvl, MONSTER_THEMES["HAVA"])

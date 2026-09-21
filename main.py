@@ -62,7 +62,7 @@ def main():
     clock = pygame.time.Clock()
     touch = TouchControls() if (_has_touch and is_android_runtime) else None
     if touch:
-        touch.set_screen_info(real_w, real_h, scale_x, scale_y)
+        touch.set_screen_info(real_w, real_h, scale_x, scale_y, offset_x, offset_y)
 
     # data-driven dosyaları oluştur (yoksa) ve JSON'dan config'i yükle
     try:
@@ -125,7 +125,7 @@ def main():
                     handled_by_touch = False
                     if touch:
                         try:
-                            handled_by_touch = touch.handle_touch(event)
+                            handled_by_touch = touch.handle_touch(event, getattr(game, 'state', None), game)
                         except: pass
                     # Android dokunması oyun UI'sine de iletilsin (handle_event içinde mouse'a çevrilir)
                     if not handled_by_touch:

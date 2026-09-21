@@ -60,9 +60,24 @@
     ]
   },
   {
+    "id": "soytari",
+    "name": "Soytari",
+    "level": 5,
+    "color": [
+      150,
+      40,
+      160
+    ],
+    "accent": [
+      255,
+      220,
+      60
+    ]
+  },
+  {
     "id": "erkek",
     "name": "Erkek",
-    "level": 5,
+    "level": 6,
     "color": [
       30,
       100,
@@ -75,9 +90,24 @@
     ]
   },
   {
+    "id": "ayi",
+    "name": "Ayi",
+    "level": 7,
+    "color": [
+      120,
+      80,
+      50
+    ],
+    "accent": [
+      80,
+      50,
+      30
+    ]
+  },
+  {
     "id": "noel_baba",
     "name": "Noel Baba",
-    "level": 6,
+    "level": 8,
     "color": [
       200,
       20,
@@ -90,9 +120,24 @@
     ]
   },
   {
+    "id": "tavuk",
+    "name": "Tavuk",
+    "level": 9,
+    "color": [
+      255,
+      230,
+      150
+    ],
+    "accent": [
+      255,
+      150,
+      40
+    ]
+  },
+  {
     "id": "ninja",
     "name": "Ninja",
-    "level": 7,
+    "level": 10,
     "color": [
       20,
       20,
@@ -105,9 +150,24 @@
     ]
   },
   {
+    "id": "robot",
+    "name": "Robot",
+    "level": 11,
+    "color": [
+      150,
+      160,
+      175
+    ],
+    "accent": [
+      80,
+      220,
+      255
+    ]
+  },
+  {
     "id": "sihirbaz",
     "name": "Sihirbaz",
-    "level": 8,
+    "level": 12,
     "color": [
       90,
       30,
@@ -120,9 +180,24 @@
     ]
   },
   {
+    "id": "iskelet",
+    "name": "Iskelet",
+    "level": 13,
+    "color": [
+      230,
+      230,
+      225
+    ],
+    "accent": [
+      120,
+      120,
+      120
+    ]
+  },
+  {
     "id": "asker",
     "name": "Asker",
-    "level": 9,
+    "level": 14,
     "color": [
       60,
       100,
@@ -135,9 +210,24 @@
     ]
   },
   {
+    "id": "korsan",
+    "name": "Korsan",
+    "level": 15,
+    "color": [
+      60,
+      55,
+      110
+    ],
+    "accent": [
+      220,
+      180,
+      70
+    ]
+  },
+  {
     "id": "balon",
     "name": "Balon",
-    "level": 10,
+    "level": 16,
     "color": [
       255,
       200,
@@ -147,6 +237,36 @@
       255,
       100,
       100
+    ]
+  },
+  {
+    "id": "gotik_kiz",
+    "name": "Gotik Kiz",
+    "level": 17,
+    "color": [
+      40,
+      20,
+      50
+    ],
+    "accent": [
+      200,
+      60,
+      120
+    ]
+  },
+  {
+    "id": "gotik_erkek",
+    "name": "Gotik Erkek",
+    "level": 18,
+    "color": [
+      25,
+      25,
+      45
+    ],
+    "accent": [
+      140,
+      80,
+      200
     ]
   }
 ]

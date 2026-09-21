@@ -33,13 +33,16 @@ class World:
         self.rng=random.Random(random.randint(0,100000)); self.generated_sections=0
         self.last_gap_start=None
 
-    def ensure_generated(self, cam_y):
+    def ensure_generated(self, cam_y, keep_cam_y=None):
+        # keep_cam_y: culling için en gerideki kamera (VS_BOT'ta bot gerideyse korumak için)
+        # Normalde keep_cam_y == cam_y
         target_y=cam_y+config.SCREEN_HEIGHT+config.WORLD_GEN_AHEAD
         while self.next_gen_y<target_y:
             self.generate_layer(self.next_gen_y)
             spacing=self._current_spacing()
             self.next_gen_y+=spacing; self.generated_sections+=1
-        limit=cam_y-config.WORLD_CLEAN_BEHIND
+        keep = keep_cam_y if keep_cam_y is not None else cam_y
+        limit=keep-config.WORLD_CLEAN_BEHIND
         new_obs=[]; new_meta=[]
         for r,m in zip(self.obstacles,self.obstacle_meta):
             if r.bottom>limit: new_obs.append(r); new_meta.append(m)

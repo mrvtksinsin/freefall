@@ -9,6 +9,10 @@ import os
 import random
 import re
 import time
+import secrets
+import base64
+import hashlib
+import hmac
 from datetime import datetime
 
 try:
@@ -20,14 +24,85 @@ except ImportError:
     NICK_MIN = 2
     NICK_MAX = 16
 
+# Argon2id (varsa), değilse PBKDF2-HMAC-SHA256 fallback (master §15)
+try:
+    import argon2 as _argon2
+except Exception:
+    _argon2 = None
+
+PBKDF2_ITER = 200000
+
 DB_LOCK = threading.Lock()
 LOBBY_LOCK = threading.Lock()
 
 NICK_RE = re.compile(r"^[A-Za-z0-9_ÇĞİÖŞÜçğıöşü ]+$")
 
+# Yeni hesabın temel oyun verisi (başlangıç)
+GAME_DATA_DEFAULT = {
+    "total_coins": 0,
+    "best_distance": 0.0,
+    "level": 1,
+    "current_level": 1,
+    "selected_character": "cop_adam",
+    "selected_hat": None,
+    "selected_bag": None,
+    "selected_glasses": None,
+    "selected_cane": None,
+    "owned_items": [],
+    "theme": "beyaz",
+    "unlocked_characters": ["cop_adam"],
+    "unlocked_levels": [1],
+    "completed_levels": [],
+    "level_stars": {},
+    "final_completed": False,
+}
+
 invites = {}
 lobbies = {}
 lobby_counter = 0
+
+def hash_password(password):
+    """Şifreyi hash'le — Argon2id öncelikli, PBKDF2 fallback."""
+    if _argon2 is not None:
+        try:
+            ph = _argon2.PasswordHasher()
+            return "argon2id$" + ph.hash(str(password))
+        except Exception:
+            pass
+    salt = os.urandom(16)
+    dk = hashlib.pbkdf2_hmac("sha256", str(password).encode("utf-8"), salt, PBKDF2_ITER)
+    return "pbkdf2$" + base64.b64encode(salt).decode("ascii") + "$" + base64.b64encode(dk).decode("ascii")
+
+def verify_password(password, stored):
+    """Hash doğrula — argon2id / pbkdf2 biçimlerini anlar."""
+    if not stored or not isinstance(stored, str):
+        return False
+    try:
+        if stored.startswith("argon2id$"):
+            if _argon2 is None:
+                return False
+            ph = _argon2.PasswordHasher()
+            try:
+                return ph.verify(stored.split("$", 1)[1], str(password))
+            except Exception:
+                return False
+        if stored.startswith("pbkdf2$"):
+            parts = stored.split("$")
+            if len(parts) != 3:
+                return False
+            try:
+                salt = base64.b64decode(parts[1])
+                dk = base64.b64decode(parts[2])
+            except Exception:
+                return False
+            dk2 = hashlib.pbkdf2_hmac("sha256", str(password).encode("utf-8"), salt, PBKDF2_ITER)
+            return hmac.compare_digest(dk, dk2)
+    except Exception:
+        return False
+    return False
+
+def make_session_token():
+    return secrets.token_hex(16)
 
 def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -42,9 +117,69 @@ def init_db():
                 online INTEGER DEFAULT 0
             )
         """)
+        # migrasyon: hesap desteği (şifre + oturum + oyun verisi)
+        try:
+            conn.execute("ALTER TABLE players ADD COLUMN password_hash TEXT")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE players ADD COLUMN account_type TEXT DEFAULT 'legacy'")
+        except Exception:
+            pass
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                token TEXT PRIMARY KEY,
+                player_id TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS game_data (
+                player_id TEXT PRIMARY KEY,
+                data TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
         conn.commit()
         conn.close()
     print(f"[Server] DB hazır: {DB_PATH}", flush=True)
+
+def get_game_data(pid):
+    """Oyuncunun sunucu tarafı oyun verisi (server yetkili kaynak §23)."""
+    with DB_LOCK:
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        cur = conn.cursor()
+        cur.execute("SELECT data FROM game_data WHERE player_id=?", (pid,))
+        row = cur.fetchone()
+        conn.close()
+    if not row:
+        return None
+    try:
+        return json.loads(row[0])
+    except Exception:
+        return None
+
+def create_session(pid):
+    token = make_session_token()
+    now = datetime.utcnow().isoformat()
+    with DB_LOCK:
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        conn.execute("DELETE FROM sessions WHERE player_id=?", (pid,))
+        conn.execute("INSERT INTO sessions (token, player_id, created_at) VALUES (?,?,?)", (token, pid, now))
+        conn.commit()
+        conn.close()
+    return token
+
+def session_player_id(token):
+    if not isinstance(token, str) or not token:
+        return None
+    with DB_LOCK:
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        cur = conn.cursor()
+        cur.execute("SELECT player_id FROM sessions WHERE token=?", (token,))
+        row = cur.fetchone()
+        conn.close()
+    return row[0] if row else None
 
 def is_valid_nick(nick):
     if not isinstance(nick, str):
@@ -60,14 +195,16 @@ def is_valid_id(pid):
 def generate_unique_id():
     with DB_LOCK:
         conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-        cur = conn.cursor()
-        for _ in range(100):
-            pid = f"{random.randint(10000, 99999):05d}"
-            cur.execute("SELECT 1 FROM players WHERE player_id=?", (pid,))
-            if not cur.fetchone():
-                conn.close()
-                return pid
-        conn.close()
+        try:
+            cur = conn.cursor()
+            for _ in range(100):
+                pid = f"{random.randint(10000, 99999):05d}"
+                cur.execute("SELECT 1 FROM players WHERE player_id=?", (pid,))
+                if not cur.fetchone():
+                    return pid
+        finally:
+            try: conn.close()
+            except: pass
     return f"{random.randint(10000, 99999):05d}"
 
 def handle_client(conn, addr):
@@ -101,28 +238,106 @@ def handle_client(conn, addr):
 
         if t == "register":
             nick = str(msg.get("nickname", "")).strip()
+            password = msg.get("password")
+            is_account = isinstance(password, str) and len(password) > 0
+            if is_account and len(password) < 4:
+                resp = {"ok": False, "error": "Şifre en az 4 karakter olmalı"}
+                conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+                return
             if not is_valid_nick(nick):
                 resp = {"ok": False, "error": f"Nickname {NICK_MIN}-{NICK_MAX} karakter olmalı"}
                 conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
                 return
             pid = generate_unique_id()
             now = datetime.utcnow().isoformat()
+            pwd_hash = hash_password(password) if is_account else ""
+            acct_type = "account" if is_account else "legacy"
             with DB_LOCK:
                 conn_db = sqlite3.connect(DB_PATH, check_same_thread=False)
                 try:
-                    conn_db.execute("INSERT INTO players (player_id, nickname, created_at, last_seen, online) VALUES (?,?,?,?,1)", (pid, nick, now, now))
+                    conn_db.execute("INSERT INTO players (player_id, nickname, created_at, last_seen, online, password_hash, account_type) VALUES (?,?,?,?,1,?,?)", (pid, nick, now, now, pwd_hash, acct_type))
                     conn_db.commit()
                 except sqlite3.IntegrityError:
                     pid = generate_unique_id()
-                    conn_db.execute("INSERT INTO players (player_id, nickname, created_at, last_seen, online) VALUES (?,?,?,?,1)", (pid, nick, now, now))
+                    conn_db.execute("INSERT INTO players (player_id, nickname, created_at, last_seen, online, password_hash, account_type) VALUES (?,?,?,?,1,?,?)", (pid, nick, now, now, pwd_hash, acct_type))
+                    conn_db.commit()
+                # yeni hesap için temel oyun verisi + oturum
+                token = ""
+                if is_account:
+                    conn_db.execute("INSERT OR REPLACE INTO game_data (player_id, data, updated_at) VALUES (?,?,?)", (pid, json.dumps(GAME_DATA_DEFAULT), now))
+                    conn_db.execute("DELETE FROM sessions WHERE player_id=?", (pid,))
+                    token = make_session_token()
+                    conn_db.execute("INSERT INTO sessions (token, player_id, created_at) VALUES (?,?,?)", (token, pid, now))
                     conn_db.commit()
                 conn_db.close()
             print(f"[SERVER] Generated ID: {pid} for {nick}", flush=True)
             print(f"[SERVER] REGISTER {nick} -> {pid} ({addr[0]})", flush=True)
             resp = {"ok": True, "player_id": pid, "nickname": nick}
+            if is_account:
+                resp["token"] = token
+                resp["game_data"] = dict(GAME_DATA_DEFAULT)
             conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
 
         elif t == "login":
+            # Yeni hesap girişi: identifier (nickname VEYA player_id) + şifre
+            if "identifier" in msg:
+                ident = str(msg.get("identifier", "")).strip()
+                password = str(msg.get("password", ""))
+                if not ident:
+                    resp = {"ok": False, "error": "Nickname veya Player ID gir"}
+                    conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+                    return
+                if not password:
+                    resp = {"ok": False, "error": "Şifre girin"}
+                    conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+                    return
+                with DB_LOCK:
+                    conn_db = sqlite3.connect(DB_PATH, check_same_thread=False)
+                    cur = conn_db.cursor()
+                    row = None
+                    if is_valid_id(ident):
+                        cur.execute("SELECT player_id, nickname, created_at, last_seen, password_hash FROM players WHERE player_id=?", (ident,))
+                        row = cur.fetchone()
+                    if not row:
+                        cur.execute("SELECT player_id, nickname, created_at, last_seen, password_hash FROM players WHERE nickname=? ORDER BY created_at DESC", (ident,))
+                        row = cur.fetchone()
+                    if not row:
+                        conn_db.close()
+                        resp = {"ok": False, "error": "Hesap bulunamadı"}
+                        conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+                        return
+                    stored_hash = row[4]
+                    if not stored_hash:
+                        conn_db.close()
+                        resp = {"ok": False, "error": "Bu hesap şifresiz kayıtlı. HESAP OLUŞTUR ile tekrar kayıt ol."}
+                        conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+                        return
+                    if not verify_password(password, stored_hash):
+                        conn_db.close()
+                        resp = {"ok": False, "error": "Şifre hatalı"}
+                        conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+                        return
+                    now = datetime.utcnow().isoformat()
+                    conn_db.execute("UPDATE players SET last_seen=?, online=1 WHERE player_id=?", (now, row[0]))
+                    token = make_session_token()
+                    conn_db.execute("DELETE FROM sessions WHERE player_id=?", (row[0],))
+                    conn_db.execute("INSERT INTO sessions (token, player_id, created_at) VALUES (?,?,?)", (token, row[0], now))
+                    conn_db.commit()
+                    cur.execute("SELECT data FROM game_data WHERE player_id=?", (row[0],))
+                    gd_row = cur.fetchone()
+                    conn_db.close()
+                try:
+                    gd_data = json.loads(gd_row[0]) if gd_row else {}
+                except Exception:
+                    gd_data = {}
+                if not isinstance(gd_data, dict):
+                    gd_data = {}
+                player = {"player_id": row[0], "nickname": row[1], "created_at": row[2], "last_seen": row[3]}
+                print(f"[SERVER] ACCOUNT LOGIN ok: {row[1]} ({row[0]})", flush=True)
+                resp = {"ok": True, "player": player, "token": token, "game_data": gd_data}
+                conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+                return
+            # Eski protokol: player_id + (opsiyonel) nickname — şifresiz online olma
             pid = str(msg.get("player_id", "")).strip()
             nick = str(msg.get("nickname", "")).strip()
             if not is_valid_id(pid):
@@ -150,6 +365,69 @@ def handle_client(conn, addr):
                 player = {"player_id": r2[0], "nickname": r2[1], "created_at": r2[2], "last_seen": r2[3]}
             print(f"[SERVER] Login successful: {pid} ({player['nickname']})", flush=True)
             resp = {"ok": True, "player": player}
+            conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+
+        elif t == "logout":
+            token = str(msg.get("token", "")).strip()
+            with DB_LOCK:
+                conn_db = sqlite3.connect(DB_PATH, check_same_thread=False)
+                if token:
+                    cur = conn_db.cursor()
+                    cur.execute("SELECT player_id FROM sessions WHERE token=?", (token,))
+                    row = cur.fetchone()
+                    if row:
+                        conn_db.execute("UPDATE players SET online=0 WHERE player_id=?", (row[0],))
+                    conn_db.execute("DELETE FROM sessions WHERE token=?", (token,))
+                    conn_db.commit()
+                conn_db.close()
+            print(f"[SERVER] Logout token ok", flush=True)
+            resp = {"ok": True}
+            conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+
+        elif t == "save_game_data":
+            token = str(msg.get("token", "")).strip()
+            pid = session_player_id(token)
+            gd = msg.get("game_data")
+            if not pid:
+                resp = {"ok": False, "error": "Geçersiz oturum"}
+                conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+                return
+            if not isinstance(gd, dict):
+                resp = {"ok": False, "error": "Geçersiz veri"}
+                conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+                return
+            try:
+                data_str = json.dumps(gd, ensure_ascii=False)
+            except Exception:
+                resp = {"ok": False, "error": "Veri serileştirilemedi"}
+                conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+                return
+            if len(data_str.encode("utf-8")) > 262144:
+                resp = {"ok": False, "error": "Veri çok büyük (max 256KB)"}
+                conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+                return
+            now = datetime.utcnow().isoformat()
+            with DB_LOCK:
+                conn_db = sqlite3.connect(DB_PATH, check_same_thread=False)
+                conn_db.execute("INSERT OR REPLACE INTO game_data (player_id, data, updated_at) VALUES (?,?,?)", (pid, data_str, now))
+                conn_db.execute("UPDATE players SET last_seen=?, online=1 WHERE player_id=?", (now, pid))
+                conn_db.commit()
+                conn_db.close()
+            print(f"[SERVER] save_game_data {pid} ({len(data_str)} bytes)", flush=True)
+            resp = {"ok": True}
+            conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+
+        elif t == "load_game_data":
+            token = str(msg.get("token", "")).strip()
+            pid = session_player_id(token)
+            if not pid:
+                resp = {"ok": False, "error": "Geçersiz oturum"}
+                conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+                return
+            gd = get_game_data(pid)
+            if gd is None:
+                gd = dict(GAME_DATA_DEFAULT)
+            resp = {"ok": True, "game_data": gd}
             conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
 
         elif t == "search":

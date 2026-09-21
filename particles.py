@@ -104,6 +104,7 @@ class ParticleSystem:
         self.atmos_particles = []
         self._atmos_timer = 0
         self._pool = []  # simple reuse pool for performance
+        self._last_level = None  # bölüm geçişinde temizlik için
 
     def _alloc(self, x, y, vx, vy, life, color, size, kind):
         # limit check before alloc
@@ -180,6 +181,11 @@ class ParticleSystem:
             alive = alive[-220:]
         self.particles = alive
 
+        # bölüm geçişinde eski atmosferi temizle (taşma yok)
+        if level_name is not None and level_name != self._last_level:
+            if self._last_level is not None:
+                self.atmos_particles.clear()
+            self._last_level = level_name
         # atmosfer — biome-aware, çok hafif, performans dostu
         self._atmos_timer += dt
         if cam_y is not None and self._atmos_timer > 0.07:
@@ -274,6 +280,189 @@ class ParticleSystem:
                         "alpha": random.randint(60,120),
                         "color": random.choice([(255,215,0),(180,140,255),(255,255,180)]),
                         "kind": "spark",
+                    })
+            # --- Yeni 14 atmosfer (hafif, düşük cap, okunabilirliği bozmayan) ---
+            elif level_name == "KATMAN KAYASI":
+                if random.random() < 0.30 and len(self.atmos_particles) < 12:
+                    self.atmos_particles.append({
+                        "x": random.randint(30, 870),
+                        "y": cam_y + random.randint(-40, 760),
+                        "vx": random.uniform(-10,10),
+                        "vy": random.uniform(8,18),
+                        "life": random.uniform(5,9),
+                        "size": 2,
+                        "alpha": random.randint(28,60),
+                        "color": (155,140,120),
+                        "kind": "dust",
+                    })
+            elif level_name == "KANALIZASYON":
+                if random.random() < 0.28 and len(self.atmos_particles) < 12:
+                    self.atmos_particles.append({
+                        "x": random.randint(40, 860),
+                        "y": cam_y + random.randint(20, 740),
+                        "vx": random.uniform(-8,8),
+                        "vy": random.uniform(-18,-7),
+                        "life": random.uniform(4,7),
+                        "size": 2,
+                        "alpha": random.randint(26,62),
+                        "color": (120,175,85),
+                        "kind": "smoke",
+                    })
+            elif level_name == "CAFE":
+                if random.random() < 0.26 and len(self.atmos_particles) < 10:
+                    self.atmos_particles.append({
+                        "x": random.randint(60, 840),
+                        "y": cam_y + random.randint(40, 700),
+                        "vx": random.uniform(-6,6),
+                        "vy": random.uniform(-16,-7),
+                        "life": random.uniform(3.5,6),
+                        "size": 2,
+                        "alpha": random.randint(22,52),
+                        "color": (255,240,210),
+                        "kind": "smoke",
+                    })
+            elif level_name == "BACKROOMS":
+                if random.random() < 0.30 and len(self.atmos_particles) < 12:
+                    self.atmos_particles.append({
+                        "x": random.randint(30, 870),
+                        "y": cam_y + random.randint(-40, 740),
+                        "vx": random.uniform(-9,9),
+                        "vy": random.uniform(7,16),
+                        "life": random.uniform(5,8),
+                        "size": 2,
+                        "alpha": random.randint(24,56),
+                        "color": (255,235,150),
+                        "kind": "dust",
+                    })
+            elif level_name == "GUC SANTRALI":
+                if random.random() < 0.22 and len(self.atmos_particles) < 10:
+                    self.atmos_particles.append({
+                        "x": random.randint(50, 850),
+                        "y": cam_y + 700 + random.randint(0,80),
+                        "vx": random.uniform(-10,10),
+                        "vy": random.uniform(-42,-18),
+                        "life": random.uniform(3,6),
+                        "size": 2,
+                        "alpha": random.randint(70,130),
+                        "color": random.choice([(255,220,0),(255,140,30)]),
+                        "kind": "spark",
+                    })
+            elif level_name == "SINIF":
+                if random.random() < 0.24 and len(self.atmos_particles) < 10:
+                    self.atmos_particles.append({
+                        "x": random.randint(40, 860),
+                        "y": cam_y + random.randint(-30, 720),
+                        "vx": random.uniform(-7,7),
+                        "vy": random.uniform(6,14),
+                        "life": random.uniform(4,7),
+                        "size": 1,
+                        "alpha": random.randint(20,48),
+                        "color": (245,245,245),
+                        "kind": "dust",
+                    })
+            elif level_name == "FABRIKA":
+                if random.random() < 0.26 and len(self.atmos_particles) < 12:
+                    self.atmos_particles.append({
+                        "x": random.randint(40, 860),
+                        "y": cam_y + random.randint(0, 700),
+                        "vx": random.uniform(-12,12),
+                        "vy": random.uniform(-20,-8),
+                        "life": random.uniform(4,7),
+                        "size": 2,
+                        "alpha": random.randint(22,58),
+                        "color": (110,110,115),
+                        "kind": "smoke",
+                    })
+            elif level_name == "POLIGAN":
+                if random.random() < 0.28 and len(self.atmos_particles) < 12:
+                    self.atmos_particles.append({
+                        "x": random.randint(30, 870),
+                        "y": cam_y + random.randint(-40, 740),
+                        "vx": random.uniform(-10,10),
+                        "vy": random.uniform(7,16),
+                        "life": random.uniform(5,9),
+                        "size": 2,
+                        "alpha": random.randint(24,58),
+                        "color": (200,150,235),
+                        "kind": "dust",
+                    })
+            elif level_name == "ORMAN":
+                if random.random() < 0.30 and len(self.atmos_particles) < 12:
+                    self.atmos_particles.append({
+                        "x": random.randint(30, 870),
+                        "y": cam_y + random.randint(-60, 720),
+                        "vx": random.uniform(-14,14),
+                        "vy": random.uniform(10,22),
+                        "life": random.uniform(5,9),
+                        "size": 2,
+                        "alpha": random.randint(26,62),
+                        "color": random.choice([(120,200,80),(90,160,60)]),
+                        "kind": "dust",
+                    })
+            elif level_name == "SARAY":
+                if random.random() < 0.24 and len(self.atmos_particles) < 10:
+                    self.atmos_particles.append({
+                        "x": random.randint(40, 860),
+                        "y": cam_y + random.randint(-40, 740),
+                        "vx": random.uniform(-8,8),
+                        "vy": random.uniform(-12,-5),
+                        "life": random.uniform(4,7),
+                        "size": 2,
+                        "alpha": random.randint(28,66),
+                        "color": (255,215,0),
+                        "kind": "spark",
+                    })
+            elif level_name == "KOY":
+                if random.random() < 0.28 and len(self.atmos_particles) < 12:
+                    self.atmos_particles.append({
+                        "x": random.randint(30, 870),
+                        "y": cam_y + random.randint(-40, 740),
+                        "vx": random.uniform(-9,9),
+                        "vy": random.uniform(7,16),
+                        "life": random.uniform(5,9),
+                        "size": 2,
+                        "alpha": random.randint(22,54),
+                        "color": (195,175,135),
+                        "kind": "dust",
+                    })
+            elif level_name == "SEHIR":
+                if random.random() < 0.22 and len(self.atmos_particles) < 10:
+                    self.atmos_particles.append({
+                        "x": random.randint(30, 870),
+                        "y": cam_y + random.randint(-40, 740),
+                        "vx": random.uniform(-10,10),
+                        "vy": random.uniform(6,14),
+                        "life": random.uniform(5,9),
+                        "size": 2,
+                        "alpha": random.randint(18,46),
+                        "color": (120,175,235),
+                        "kind": "smoke",
+                    })
+            elif level_name == "TOKYO":
+                if random.random() < 0.24 and len(self.atmos_particles) < 10:
+                    self.atmos_particles.append({
+                        "x": random.randint(40, 860),
+                        "y": cam_y + random.randint(-40, 740),
+                        "vx": random.uniform(-10,10),
+                        "vy": random.uniform(-10,10),
+                        "life": random.uniform(4,7),
+                        "size": 2,
+                        "alpha": random.randint(50,110),
+                        "color": random.choice([(255,50,150),(50,200,255)]),
+                        "kind": "spark",
+                    })
+            elif level_name == "FRANSA":
+                if random.random() < 0.26 and len(self.atmos_particles) < 12:
+                    self.atmos_particles.append({
+                        "x": random.randint(30, 870),
+                        "y": cam_y + random.randint(-60, 740),
+                        "vx": random.uniform(-10,10),
+                        "vy": random.uniform(6,14),
+                        "life": random.uniform(5,9),
+                        "size": 2,
+                        "alpha": random.randint(22,54),
+                        "color": (200,185,210),
+                        "kind": "dust",
                     })
         for a in self.atmos_particles:
             a["x"] += a["vx"]*dt

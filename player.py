@@ -5,6 +5,11 @@ import graphics as gfx
 
 CHAR_OFFSETS = {
     "default": {"hat": (0,-11), "glasses": (0,-2), "bag": (8, 10), "cane": (-6, 8)},
+    "cop_adam": {"hat": (0,-11), "glasses": (0,-2), "bag": (8, 10), "cane": (-6, 8)},
+    "madame":  {"hat": (0,-13), "glasses": (0,-2), "bag": (8, 10), "cane": (-6, 8)},
+    "kadin":   {"hat": (0,-12), "glasses": (0,-2), "bag": (8, 10), "cane": (-6, 8)},
+    "erkek":   {"hat": (0,-11), "glasses": (0,-2), "bag": (8, 10), "cane": (-6, 8)},
+    "asker":   {"hat": (0,-10), "glasses": (0,-2), "bag": (8, 10), "cane": (-6, 8)},
     "ninja":   {"hat": (0,-13), "glasses": (0,-3), "bag": (9, 11), "cane": (-7, 9)},
     "balon":   {"hat": (0,-15), "glasses": (0,-4), "bag": (8, 12), "cane": (-6, 10)},
     "sihirbaz":{"hat": (0,-16), "glasses": (0,-2), "bag": (8, 10), "cane": (-8, 6)},
@@ -267,6 +272,15 @@ class Player:
         if self.alive:
             gfx.draw_glow(surf, (sx+self.w//2, int(by+bh//2+bob)), 26, accent, 18)
 
+        # ÇANTA — vücudun ARKASINDA çizilir (arka taraf, bakış yönünün karşısı)
+        bx_off, by_off = offsets["bag"]
+        bag = equipped.get("bag")
+        if bag:
+            side = -1 if self.facing >= 0 else 1
+            bag_x = body_rect.x - 6 if side < 0 else body_rect.right - 6
+            br = pygame.Rect(bag_x, body_rect.y + 10 + by_off, 12, 16)
+            self._draw_bag(surf, br, bag)
+
         # VÜCUT - katmanlı
         # ana gövde gradient gibi iki ton
         # önce base
@@ -421,20 +435,18 @@ class Player:
         ox, oy = offsets["hat"]
         hat=equipped.get("hat")
         if hat:
-            self._draw_hat(surf, head_cx+ox, head_cy-head_r-6+oy, hat)
+            self._draw_hat(surf, head_cx-head_r+ox, head_cy-head_r-3+oy, hat)
         gx, gy = offsets["glasses"]
         glasses=equipped.get("glasses")
         if glasses:
             self._draw_glasses(surf, head_cx+gx, head_cy+gy, glasses)
-        bx_off, by_off = offsets["bag"]
-        bag=equipped.get("bag")
-        if bag:
-            br=pygame.Rect(body_rect.right-10+bx_off, body_rect.y+10+by_off, 12, 16)
-            self._draw_bag(surf, br, bag)
         cx_off, cy_off = offsets["cane"]
         cane=equipped.get("cane")
         if cane:
-            cr=pygame.Rect(sx-7+cx_off, int(by+7+cy_off), 6, bh-3)
+            cane_x = sx - 7 + cx_off
+            if self.facing >= 0:
+                cane_x = 2*(sx + self.w//2) - (cane_x + 6)
+            cr=pygame.Rect(cane_x, int(by+7+cy_off), 6, bh-3)
             self._draw_cane(surf, cr, cane, self.state)
 
         # crush

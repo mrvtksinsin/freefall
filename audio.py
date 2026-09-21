@@ -104,6 +104,9 @@ class AudioManager:
     def load_or_generate(self):
         if not self.enabled:
             return
+        if self.sounds:
+            # daha önce üretildi — tekrar üretme (çoklu Game() kurulumunda hız)
+            return
         try:
             # coin — bright chime
             self.sounds["coin"] = self._make_tone(880, 120, 0.35)

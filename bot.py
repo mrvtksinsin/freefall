@@ -45,50 +45,120 @@ class BotPlayer:
         return None
 
     def ai_choose(self, obstacles, cam_y):
-        """Bir sonraki engelin gap ortasına doğru hedef seç."""
-        # Önündeki en yakın engeli bul (y > self.y ve ekran içinde)
+        """Bir sonraki engelin gap ortasına doğru hedef seç — dünya koordinatında, geniş görüş."""
+        # 600->950 geniş görüş, 300 filtresi kaldırıldı; dünya y'sine göre
+        view_ahead = 950
         best = None
         best_dist = 1e9
         for o in obstacles:
-            # sadece oyuncunun önündeki engeller (y >= self.y)
-            if o.y < self.y - 20:
+            if o.y < self.y + 18:
                 continue
-            if o.y > self.y + 600:
+            if o.y > self.y + view_ahead:
                 continue
-            # sol/sağ engel — gap bulmak için çiftleri işle
-            # Basit: gap ortasını tahmin et
-            # Bu engelin karşı eşini bul (aynı y)
-            if abs(o.y - self.y) < 300:
-                # en yakın
-                d = o.y - self.y
-                if 0 <= d < best_dist:
-                    best_dist = d
-                    best = o
-        # Hata ekle
-        if random.random() < self.mistake_chance:
+            d = o.y - self.y
+            if 0 <= d < best_dist:
+                best_dist = d
+                best = o
+        # Hata ekle — sadece best bulunduğunda hata uygula, hareketsiz kalma durumu hariç
+        if best is not None and random.random() < self.mistake_chance:
             return random.choice([-1, 0, 1])
         if best is None:
+            # Önünde geçerli engel yok: tamamen hareketsiz kalma yerine
+            # en yakın gap'e doğru hafif yönelim dene (rastgele değil, veriye dayalı)
+            # Uzakta kalan ilk engeli bul
+            fallback = None
+            fb_dist = 1e9
+            for o in obstacles:
+                if o.y <= self.y:
+                    continue
+                d = o.y - self.y
+                if d < fb_dist:
+                    fb_dist = d
+                    fallback = o
+            if fallback is not None:
+                y = fallback.y
+                left_max = 0
+                right_min = config.SCREEN_WIDTH
+                for oo in obstacles:
+                    if abs(oo.y - y) < 2:
+                        if oo.x == 0:
+                            left_max = max(left_max, oo.right)
+                        else:
+                            right_min = min(right_min, oo.left)
+                gap_center = (left_max + right_min) / 2
+                bot_center = self.x + self.w/2
+                if gap_center < bot_center - 22:
+                    return -1
+                elif gap_center > bot_center + 22:
+                    return 1
             return 0
-        # Gap tahmini: ekran ortasına gitme eğilimi + rastgele
-        # Gerçek gap'i bul: aynı y'deki iki engelin arası
-        y = best.y
-        left_max = 0
-        right_min = config.SCREEN_WIDTH
+        # Mevcut en yakın gap + sonraki 1-2 gap'i birlikte değerlendir
+        # Önce y'ye göre gruplanmış gap merkezlerini topla (950px içinde)
+        # step_deco (h=6) gibi küçük dekor engelleri gap sayılmaz
+        gaps = []  # (y, gap_center)
+        seen_y = set()
         for o in obstacles:
-            if abs(o.y - y) < 2:
-                if o.x == 0:
-                    left_max = max(left_max, o.right)
-                else:
-                    right_min = min(right_min, o.left)
-        gap_center = (left_max + right_min) / 2
-        # Botun hedefi gap ortası
-        bot_center = self.x + self.w/2
-        if gap_center < bot_center - 18:
-            return -1
-        elif gap_center > bot_center + 18:
-            return 1
-        else:
+            if o.height < 12:  # step_deco filtresi
+                continue
+            if o.y < self.y + 18 or o.y > self.y + view_ahead:
+                continue
+            yk = int(round(o.y / 10) * 10)  # 10px gruplama, 6px kaymaları birleştir
+            if yk in seen_y:
+                continue
+            seen_y.add(yk)
+            left_max = 0
+            right_min = config.SCREEN_WIDTH
+            for oo in obstacles:
+                if oo.height < 12:
+                    continue
+                if abs(oo.y - o.y) < 10:
+                    if oo.x == 0:
+                        left_max = max(left_max, oo.right)
+                    else:
+                        right_min = min(right_min, oo.left)
+            if right_min <= left_max:
+                continue
+            # gap genişliği en az 90 olmalı
+            if right_min - left_max < 90:
+                continue
+            gaps.append((o.y, (left_max + right_min) / 2))
+        gaps.sort(key=lambda t: t[0])
+        if not gaps:
             return 0
+        cur_y, cur_center = gaps[0]
+        bot_center = self.x + self.w/2
+        # Mevcut gap'e göre yön
+        if cur_center < bot_center - 22:
+            cur_dir = -1
+        elif cur_center > bot_center + 22:
+            cur_dir = 1
+        else:
+            cur_dir = 0
+        # Bot zaten mevcut gap merkezinde ve on_ground ise, bir sonraki gap'e bak
+        if cur_dir == 0 and self.on_ground and len(gaps) >= 2:
+            nxt_y, nxt_center = gaps[1]
+            if nxt_center < bot_center - 18:
+                cur_dir = -1
+            elif nxt_center > bot_center + 18:
+                cur_dir = 1
+            else:
+                if len(gaps) >= 3:
+                    _, nxt2_center = gaps[2]
+                    if nxt2_center < bot_center - 18:
+                        cur_dir = -1
+                    elif nxt2_center > bot_center + 18:
+                        cur_dir = 1
+                    else:
+                        cur_dir = 0
+                else:
+                    cur_dir = 0
+            # hata payı (veriye dayalı karar bozulmadan hafif)
+            if random.random() < self.mistake_chance:
+                return random.choice([-1, 0, 1])
+            return cur_dir
+        if random.random() < self.mistake_chance:
+            return random.choice([-1, 0, 1])
+        return cur_dir
 
     def handle_ai(self, obstacles, dt):
         if not self.alive:
@@ -276,6 +346,15 @@ class BotPlayer:
         pygame.draw.ellipse(surf, (0,0,0,70), pygame.Rect(sx+self.w//2-(bw-4)//2, sy+self.h-3, max(10,bw-4), 6))
         if self.alive:
             gfx.draw_glow(surf, (sx+self.w//2, int(by+bh//2+bob)), 22, accent, 14)
+        # ÇANTA — vücudun ARKASINDA (arka taraf, bakış yönünün karşısı)
+        if equipped:
+            bx_off, by_off = offsets["bag"]
+            bag = equipped.get("bag")
+            if bag:
+                side = -1 if self.facing >= 0 else 1
+                bag_x = body_rect.x - 6 if side < 0 else body_rect.right - 6
+                br = pygame.Rect(bag_x, body_rect.y + 10 + by_off, 12, 16)
+                _P._draw_bag(None, surf, br, bag)
         pygame.draw.rect(surf, color, body_rect, border_radius=9)
         dark = tuple(max(0,c-38) for c in color)
         shadow_rect=pygame.Rect(body_rect.x, body_rect.y+body_rect.height-12, body_rect.width, 12)
@@ -300,3 +379,21 @@ class BotPlayer:
         pygame.draw.ellipse(surf, (255,255,255), pygame.Rect(head_cx+1, head_cy-2, 5, 6))
         pygame.draw.circle(surf, (60,40,20), (head_cx-3, head_cy+1), 2)
         pygame.draw.circle(surf, (60,40,20), (head_cx+4, head_cy+1), 2)
+        # KOZMETİKLER — ana oyuncuyla aynı hizalama
+        if equipped:
+            ox, oy = offsets["hat"]
+            hat = equipped.get("hat")
+            if hat:
+                _P._draw_hat(None, surf, head_cx-head_r+ox, head_cy-head_r-3+oy, hat)
+            gx, gy = offsets["glasses"]
+            glasses = equipped.get("glasses")
+            if glasses:
+                _P._draw_glasses(None, surf, head_cx+gx, head_cy+gy, glasses)
+            cx_off, cy_off = offsets["cane"]
+            cane = equipped.get("cane")
+            if cane:
+                cane_x = sx - 7 + cx_off
+                if self.facing >= 0:
+                    cane_x = 2*(sx + self.w//2) - (cane_x + 6)
+                cr = pygame.Rect(cane_x, int(by+7+cy_off), 6, bh-3)
+                _P._draw_cane(None, surf, cr, cane, self.state)

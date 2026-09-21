@@ -7,6 +7,7 @@ __pycache__/
 # Save / user data (local only)
 save.json
 save.json.bak
+local_accounts.json
 
 # Server database (local, contains player IDs)
 SERVER/database/players.db

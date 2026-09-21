@@ -26,22 +26,49 @@ class TouchControls:
         self.screen_h = config.SCREEN_HEIGHT
         self.real_w = config.SCREEN_WIDTH
         self.real_h = config.SCREEN_HEIGHT
+        self.offset_x = 0
+        self.offset_y = 0
+        # swipe scroll için
+        self._swipe_start_y = None
+        self._swipe_last_y = None
+        self._swipe_threshold = 22  # game px, küçük hareketi swipe sayma
 
-    def set_screen_info(self, real_w, real_h, scale_x, scale_y):
+    def set_screen_info(self, real_w, real_h, scale_x, scale_y, offset_x=0, offset_y=0):
         self.real_w = real_w
         self.real_h = real_h
         self.scale_x = scale_x
         self.scale_y = scale_y
+        self.offset_x = offset_x
+        self.offset_y = offset_y
 
     def _to_game_pos(self, pos):
-        """Gerçek ekran posunu oyun 900x700 koordinatına çevir"""
+        """Gerçek ekran posunu oyun 900x700 koordinatına çevir (letterbox offset çıkar)"""
         x, y = pos
-        gx = x / self.scale_x
-        gy = y / self.scale_y
+        gx = (x - self.offset_x) / self.scale_x if self.scale_x else x
+        gy = (y - self.offset_y) / self.scale_y if self.scale_y else y
         return gx, gy
 
-    def handle_touch(self, event):
+    def handle_touch(self, event, game_state=None, game=None):
         """MOUSE/FINGER eventlerini işle, True dönerse oyun handle_etmemeli"""
+        # Swipe scroll sadece shop/inventory/levels için (Android)
+        if game_state in ("shop", "inventory", "levels") and game is not None:
+            if event.type in (pygame.FINGERDOWN, pygame.FINGERUP, pygame.FINGERMOTION):
+                x = event.x * self.real_w
+                y = event.y * self.real_h
+                gx, gy = self._to_game_pos((x, y))
+                return self._handle_swipe(gx, gy, event.type, game_state, game)
+            elif event.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION):
+                if hasattr(event, 'pos'):
+                    gx, gy = self._to_game_pos(event.pos)
+                    if event.type == pygame.MOUSEBUTTONDOWN:
+                        return self._handle_swipe(gx, gy, pygame.FINGERDOWN, game_state, game)
+                    elif event.type == pygame.MOUSEBUTTONUP:
+                        self._swipe_start_y = None
+                        self._swipe_last_y = None
+                        return False
+                    elif event.type == pygame.MOUSEMOTION and getattr(event, 'buttons', (0,))[0]:
+                        return self._handle_swipe(gx, gy, pygame.FINGERMOTION, game_state, game)
+
         if event.type in (pygame.FINGERDOWN, pygame.FINGERUP, pygame.FINGERMOTION):
             # finger x,y 0-1 normalize
             x = event.x * self.real_w
@@ -60,9 +87,68 @@ class TouchControls:
                     self.right_pressed = False
                     self.down_pressed = False
                     self.up_pressed = False
+                    self._swipe_start_y = None
+                    self._swipe_last_y = None
                     return False
                 elif event.type == pygame.MOUSEMOTION and event.buttons[0]:
                     return self._update_from_pos(gx, gy, pygame.FINGERMOTION)
+        return False
+
+    def _handle_swipe(self, gx, gy, typ, game_state, game):
+        """Shop/inventory/levels için dikey swipe scroll"""
+        if typ == pygame.FINGERDOWN:
+            self._swipe_start_y = gy
+            self._swipe_last_y = gy
+            return False  # tap'e izin ver
+        elif typ == pygame.FINGERUP:
+            self._swipe_start_y = None
+            self._swipe_last_y = None
+            return False
+        elif typ == pygame.FINGERMOTION:
+            if self._swipe_start_y is None:
+                return False
+            dy = gy - self._swipe_start_y
+            if abs(dy) < self._swipe_threshold:
+                return False  # küçük hareketi swipe sayma
+            # yeterli hareket -> bir adım scroll
+            delta = 1 if dy < 0 else -1  # yukarı swipe -> index +1 (aşağı kaydır)
+            if game_state == "shop":
+                lst, _ = game.current_shop_list()
+                n = len(lst)
+                if n:
+                    new = max(0, min(n - 1, game.shop_index + delta))
+                    if new != game.shop_index:
+                        game.shop_index = new
+                        try: game._ensure_selection_visible("shop")
+                        except: pass
+            elif game_state == "inventory":
+                tabs = ["hat","bag","glasses","cane"]
+                key = tabs[game.inv_tab] if hasattr(game,'inv_tab') else 'hat'
+                try:
+                    import config as _cfg
+                    lst = [it for it in _cfg.SHOP_ITEMS[key] if it["id"] in game.save.get("owned_items",[])]
+                except:
+                    lst = []
+                n = len(lst)
+                if n:
+                    new = max(0, min(n - 1, game.inv_index + delta))
+                    if new != game.inv_index:
+                        game.inv_index = new
+                        try: game._ensure_selection_visible("inventory")
+                        except: pass
+            elif game_state == "levels":
+                n = len(game.save.get("unlocked_levels",[])) if False else 23  # config.LEVELS length
+                try:
+                    import config as _cfg2
+                    n = len(_cfg2.LEVELS)
+                except:
+                    n = 23
+                new = max(0, min(n - 1, game.levels_index + delta))
+                game.levels_index = new
+            # bir adım sonrası için start'ı kaydır (sürekli swipe)
+            self._swipe_start_y = gy
+            self._swipe_last_y = gy
+            return True
         return False
 
     def _update_from_pos(self, gx, gy, typ):

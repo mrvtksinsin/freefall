@@ -85,21 +85,27 @@ def draw_glow(surf, pos, radius, color, alpha=90):
         s = _glow_cache[key]
     surf.blit(s, (pos[0]-s.get_width()//2, pos[1]-s.get_height()//2), special_flags=pygame.BLEND_RGBA_ADD)
 
+_vignette_cache = {}
+
 def draw_vignette(surf, intensity=0.22):
     """Subtle vignette — depth feel without cost."""
-    w,h = surf.get_size()
-    vig = pygame.Surface((w,h), pygame.SRCALPHA)
-    cx, cy = w//2, h//2
-    maxd = math.hypot(cx, cy)
-    for y in range(0, h, 2):
-        for x in range(0, w, 4):
-            d = math.hypot(x-cx, y-cy) / maxd
-            a = int( intensity * 160 * (d**1.7))
-            if a>4:
-                vig.set_at((x,y), (0,0,0,a))
-                if x+1<w: vig.set_at((x+1,y), (0,0,0,a))
+    key = (surf.get_size(), int(round(intensity, 3) * 1000))
+    vig = _vignette_cache.get(key)
+    if vig is None:
+        w, h = surf.get_size()
+        vig = pygame.Surface((w, h), pygame.SRCALPHA)
+        cx, cy = w // 2, h // 2
+        maxd = math.hypot(cx, cy)
+        for y in range(0, h, 2):
+            for x in range(0, w, 4):
+                d = math.hypot(x - cx, y - cy) / maxd
+                a = int(intensity * 160 * (d ** 1.7))
+                if a > 4:
+                    vig.set_at((x, y), (0, 0, 0, a))
+                    if x + 1 < w: vig.set_at((x + 1, y), (0, 0, 0, a))
+        _vignette_cache[key] = vig
     # use multiply-like blend via alpha blit
-    surf.blit(vig, (0,0))
+    surf.blit(vig, (0, 0))
 
 def draw_shadow(surf, rect, alpha=50):
     shadow = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)

@@ -51,6 +51,12 @@ DEFAULT_SAVE = {
     # Oyuncu profili — kalıcı 5 haneli ID
     "nickname": None,
     "player_id": None,
+    # Hesap sistemi (master §14-21) — guest varsayılan, hesaplı kullanıcıda "account"
+    "account_mode": "guest",
+    "account_token": None,
+    "account_username": None,
+    # İlk ana menü girişinde NASIL OYNANIR? otomatik gösterilir (§31)
+    "show_how_to_play": True,
 }
 
 def _deep_copy_default():
@@ -118,6 +124,36 @@ def load_save():
         # secili karakter gecersizse cop_adam'a dondur
         if out.get("selected_character") not in valid_ids:
             out["selected_character"] = "cop_adam"
+        # Mağaza item sanitizasyonu — bozuk/olmayan ID'ler temizlenir, duplicate atılır
+        try:
+            from config import SHOP_ITEMS as _SHOP
+            _valid_item_ids = set()
+            for _cat in _SHOP.values():
+                for _it in _cat:
+                    _valid_item_ids.add(str(_it.get("id")))
+            # owned_items
+            if not isinstance(out.get("owned_items"), list):
+                out["owned_items"] = []
+            _clean_owned = []
+            _seen = set()
+            for _oid in out.get("owned_items", []):
+                _sid = str(_oid) if _oid is not None else ""
+                if _sid in _valid_item_ids and _sid not in _seen:
+                    _clean_owned.append(_sid)
+                    _seen.add(_sid)
+            out["owned_items"] = _clean_owned
+            # selected_* — None veya valid ve owned ise korunur, değilse None
+            for _sk in ("selected_hat", "selected_bag", "selected_glasses", "selected_cane"):
+                _v = out.get(_sk)
+                if _v is None:
+                    continue
+                _sv = str(_v)
+                if _sv not in _valid_item_ids or _sv not in out["owned_items"]:
+                    out[_sk] = None
+                else:
+                    out[_sk] = _sv
+        except Exception:
+            pass
         # bölüm sistemi migration — 23 bölüm (1-22 + FINAL 23), kesin sıralı kilit
         if "unlocked_levels" not in out or not isinstance(out["unlocked_levels"], list) or not out["unlocked_levels"]:
             out["unlocked_levels"] = [1]
@@ -263,6 +299,32 @@ def save_game(data):
                         data["settings"][ak] = round(max(0.0, min(1.0, float(data["settings"][ak]))), 2)
                     except:
                         pass
+        # Mağaza item sanitizasyonu — kayıttan önce temizle (duplicate + invalid)
+        try:
+            _valid = set()
+            for _cat in CHARACTERS:  # keep unlocked check above, here shop ids
+                pass
+            from config import SHOP_ITEMS as _SHOP2
+            _valid_ids = set(str(_it.get("id")) for _cat in _SHOP2.values() for _it in _cat)
+            if isinstance(data.get("owned_items"), list):
+                _seen = set()
+                _clean = []
+                for _oid in data["owned_items"]:
+                    _sid = str(_oid) if _oid is not None else ""
+                    if _sid in _valid_ids and _sid not in _seen:
+                        _clean.append(_sid)
+                        _seen.add(_sid)
+                data["owned_items"] = _clean
+            for _sk in ("selected_hat", "selected_bag", "selected_glasses", "selected_cane"):
+                _v = data.get(_sk)
+                if _v is not None:
+                    _sv = str(_v)
+                    if _sv not in _valid_ids or _sv not in data.get("owned_items", []):
+                        data[_sk] = None
+                    else:
+                        data[_sk] = _sv
+        except Exception:
+            pass
         # level_stars keys str for json
         if "level_stars" in data and isinstance(data["level_stars"], dict):
             data["level_stars"] = {str(k): int(v) for k, v in data["level_stars"].items()}

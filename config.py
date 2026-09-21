@@ -79,18 +79,26 @@ LEVELS = [
     {"level": 23, "name": "FINAL",          "distance": 302000,"bg": (12,  12,  28),  "wall": (40,  40,  80),  "obstacle": (90,  70,  140),   "accent": (255,215,0)},
 ]
 
-# Karakterler - FINAL RELEASE: 10 karakter (seviye ile acilma)
+# Karakterler - FINAL RELEASE: 18 karakter (seviye ile acilma)
 CHARACTERS = [
-    {"id": "cop_adam",    "name": "Cop Adam",   "level": 1, "color": (80,80,80),   "accent": (200,200,200)},
-    {"id": "soylu",       "name": "Soylu",      "level": 2, "color": (180,30,30),  "accent": (255,215,0)},
-    {"id": "madame",      "name": "Madame",     "level": 3, "color": (200,50,120), "accent": (255,180,220)},
-    {"id": "kadin",       "name": "Kadin",      "level": 4, "color": (255,120,150),"accent": (255,200,210)},
-    {"id": "erkek",       "name": "Erkek",      "level": 5, "color": (30,100,200), "accent": (180,210,255)},
-    {"id": "noel_baba",   "name": "Noel Baba",  "level": 6, "color": (200,20,20),  "accent": (255,255,255)},
-    {"id": "ninja",       "name": "Ninja",      "level": 7, "color": (20,20,20),   "accent": (255,50,50)},
-    {"id": "sihirbaz",    "name": "Sihirbaz",   "level": 8, "color": (90,30,150),  "accent": (180,100,255)},
-    {"id": "asker",       "name": "Asker",      "level": 9, "color": (60,100,40),  "accent": (120,180,90)},
-    {"id": "balon",       "name": "Balon",      "level": 10,"color": (255,200,50), "accent": (255,100,100)},
+    {"id": "cop_adam",    "name": "Cop Adam",    "level": 1,  "color": (80,80,80),    "accent": (200,200,200)},
+    {"id": "soylu",       "name": "Soylu",       "level": 2,  "color": (180,30,30),   "accent": (255,215,0)},
+    {"id": "madame",      "name": "Madame",      "level": 3,  "color": (200,50,120),  "accent": (255,180,220)},
+    {"id": "kadin",       "name": "Kadin",       "level": 4,  "color": (255,120,150), "accent": (255,200,210)},
+    {"id": "soytari",     "name": "Soytari",     "level": 5,  "color": (150,40,160),  "accent": (255,220,60)},
+    {"id": "erkek",       "name": "Erkek",       "level": 6,  "color": (30,100,200),  "accent": (180,210,255)},
+    {"id": "ayi",         "name": "Ayi",         "level": 7,  "color": (120,80,50),   "accent": (80,50,30)},
+    {"id": "noel_baba",   "name": "Noel Baba",   "level": 8,  "color": (200,20,20),   "accent": (255,255,255)},
+    {"id": "tavuk",       "name": "Tavuk",       "level": 9,  "color": (255,230,150), "accent": (255,150,40)},
+    {"id": "ninja",       "name": "Ninja",       "level": 10, "color": (20,20,20),    "accent": (255,50,50)},
+    {"id": "robot",       "name": "Robot",       "level": 11, "color": (150,160,175), "accent": (80,220,255)},
+    {"id": "sihirbaz",    "name": "Sihirbaz",    "level": 12, "color": (90,30,150),   "accent": (180,100,255)},
+    {"id": "iskelet",     "name": "Iskelet",     "level": 13, "color": (230,230,225), "accent": (120,120,120)},
+    {"id": "asker",       "name": "Asker",       "level": 14, "color": (60,100,40),   "accent": (120,180,90)},
+    {"id": "korsan",      "name": "Korsan",      "level": 15, "color": (60,55,110),   "accent": (220,180,70)},
+    {"id": "balon",       "name": "Balon",       "level": 16, "color": (255,200,50),  "accent": (255,100,100)},
+    {"id": "gotik_kiz",   "name": "Gotik Kiz",   "level": 17, "color": (40,20,50),    "accent": (200,60,120)},
+    {"id": "gotik_erkek", "name": "Gotik Erkek", "level": 18, "color": (25,25,45),    "accent": (140,80,200)},
 ]
 
 # Mağaza - her kategori x10 (toplam 40 ürün)
