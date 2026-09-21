@@ -232,6 +232,39 @@ class Game:
             return False
         return True
 
+    def _get_online_nick(self):
+        """ONLINE için doğru nick: yerel hesap varsa account_username, yoksa nickname."""
+        if self.save.get("account_mode") == "account":
+            uname = str(self.save.get("account_username") or "").strip()
+            if save_system.is_valid_nick(uname):
+                return uname
+        nick = str(self.save.get("nickname") or "").strip()
+        if save_system.is_valid_nick(nick):
+            return nick
+        return nick or "Oyuncu"
+
+    def _get_display_id(self):
+        """UI için ID: geçerli ise 5 haneli, yoksa ????? değil Yükleniyor/—"""
+        pid = str(self.save.get("player_id") or "").strip()
+        if save_system.is_valid_player_id(pid):
+            return pid
+        # hesaplı ama ID henüz yok -> Yükleniyor, misafir -> —
+        if self.save.get("account_mode") == "account":
+            # ONLINE bağlanıyorsa Yükleniyor
+            if self.online_mgr and getattr(self.online_mgr, '_online_mode', False):
+                return "Yükleniyor..."
+            return "—"
+        return "—"
+
+    def _get_display_nick(self):
+        """UI için nick: hesaplı ise account_username öncelikli"""
+        if self.save.get("account_mode") == "account":
+            uname = str(self.save.get("account_username") or "").strip()
+            if save_system.is_valid_nick(uname):
+                return uname
+        nick = str(self.save.get("nickname") or "").strip()
+        return nick if nick else "Oyuncu"
+
     def _enter_main_menu(self, first_entry=False):
         """Hesap kapısından ana menüye geç. İlk girişte NASIL OYNANIR? otomatik (§31)."""
         self.state = "menu"
@@ -1562,12 +1595,13 @@ class Game:
             return
         # ONLINE modu AÇ — bg polling/persistent artık server'a dokunabilir
         self.online_mgr.set_online_mode(True)
-        # Eğer henüz ID yoksa server'dan iste
+        # Eğer henüz ID yoksa server'dan iste — yerel hesap varsa account_username kullan
         pid = str(self.save.get("player_id") or "").strip()
-        nick = str(self.save.get("nickname") or "").strip()
+        nick = self._get_online_nick()
         import save_system as _ss
         if not _ss.is_valid_player_id(pid):
-            # İlk ONLINE — server ID üretsin
+            # İlk ONLINE — server ID üretsin (aynı yerel hesap için tek ID)
+            print(f"[ONLINE] İlk giriş {nick} için register_new", flush=True)
             ok, result = self.online_mgr.register_new(nick)
             if not ok:
                 if "Sunucuya bağlanılamadı" in str(result):
@@ -1575,23 +1609,26 @@ class Game:
                 else:
                     self.online_error = result
                 return
-            # ok -> save zaten güncellendi (register_new içinde)
+            # ok -> save zaten güncellendi (register_new içinde) -> aynı hesap için korunur
+            print(f"[ONLINE] Yeni ID {result} -> {nick} kaydedildi", flush=True)
             self.online_error = ""
         else:
-            # Mevcut ID ile login (online duruma geç)
+            # Mevcut geçerli ID ile login — tekrar register_new çalıştırma
             ok, msg = self.online_mgr.login()
             if not ok:
-                # login başarısızsa (eski ID DB'de yoksa) yeni ID dene
                 if "bulunamadı" in str(msg):
+                    print(f"[ONLINE] ID {pid} sunucuda bulunamadı ({nick}), kontrollü yeniden kayıt", flush=True)
+                    self.online_error = f"Eski ID bulunamadı, yeni ID alınıyor..."
                     ok2, res2 = self.online_mgr.register_new(nick)
                     if not ok2:
                         self.online_error = res2 if "Sunucuya" in str(res2) else "Sunucuya bağlanılamadı."
                         return
+                    print(f"[ONLINE] Yeni ID {res2} verildi (eski {pid} yoktu)", flush=True)
+                    self.online_error = ""
                 elif "Sunucuya bağlanılamadı" in str(msg):
                     self.online_error = "Sunucuya bağlanılamadı."
                     return
                 else:
-                    # login hatası ama offline değilse yine de devam et
                     self.online_error = ""
             else:
                 self.online_error = ""
@@ -2828,10 +2865,10 @@ class Game:
         pygame.draw.rect(surf, bg_col if len(bg_col)==4 else bg_col, pill, border_radius=8)
         pygame.draw.rect(surf,(255,255,255,24) if theme["id"]!="beyaz" else (0,0,0,16), pill, width=1, border_radius=8)
         surf.blit(info, (pill.centerx - info.get_width()//2, pill.centery - info.get_height()//2))
-        # profil rozeti — nick + 5 haneli ID
-        nick = self.save.get("nickname") or "?"
-        pid = self.save.get("player_id") or "?????"
-        prof_txt = f"{nick}  •  ID: {pid}"
+        # profil rozeti — nick + 5 haneli ID (ayrı, ????? yok)
+        nick = self._get_display_nick()
+        pid = self._get_display_id()
+        prof_txt = f"Oyuncu: {nick}  •  ID: {pid}"
         prof = self.font_small.render(prof_txt, True, (255,255,255) if "siyah" in theme["id"] else (30,30,34))
         prof_box = pygame.Rect(config.SCREEN_WIDTH- prof.get_width()-28, 8, prof.get_width()+16, 22)
         pygame.draw.rect(surf, (0,0,0,48) if "siyah" in theme["id"] else (255,255,255,200), prof_box, border_radius=8)
@@ -3620,17 +3657,17 @@ class Game:
         surf.blit(title, (config.SCREEN_WIDTH//2 - title.get_width()//2, 24))
         hint = self.font_small.render("Nasıl oynamak istersin?", True, theme["hud"])
         surf.blit(hint, (config.SCREEN_WIDTH//2 - hint.get_width()//2, 56))
-        # nick / id kartı
-        nick = self.save.get("nickname") or "?"
-        pid = self.save.get("player_id") or "?????"
+        # nick / id kartı — ayrı gösterim, ????? yok
+        nick = self._get_display_nick()
+        pid = self._get_display_id()
         guest = self.is_guest()
         card = pygame.Rect(config.SCREEN_WIDTH//2-180, 78, 360, 34)
         pygame.draw.rect(surf, (0,0,0,48), card, border_radius=9)
         pygame.draw.rect(surf, (255,215,0,110), card, width=1, border_radius=9)
         if guest:
-            txt = self.font_med.render(f"{nick}  •  MİSAFİR (ONLINE kilitli)", True, (180,140,60))
+            txt = self.font_med.render(f"Oyuncu: {nick}  •  MİSAFİR (ONLINE kilitli)", True, (180,140,60))
         else:
-            txt = self.font_med.render(f"{nick}  •  ID: {pid}", True, (255,255,255) if "siyah" in theme["id"] else (30,30,34))
+            txt = self.font_med.render(f"Oyuncu: {nick}  •  ID: {pid}", True, (255,255,255) if "siyah" in theme["id"] else (30,30,34))
         surf.blit(txt, (card.centerx - txt.get_width()//2, card.centery - txt.get_height()//2))
         if guest:
             opts = [("ONLINE 🔒", "Hesap ile giriş yap — misafir kilitli"), ("BİLGİSAYARA KARŞI", "Çevrimdışı BOT ile yarış"), ("GERİ", "")]
@@ -3683,10 +3720,10 @@ class Game:
         surf.blit(title, (config.SCREEN_WIDTH//2 - title.get_width()//2, 24))
         hint = self.font_small.render("Rakibin 5 haneli ID'sini gir ve oyuncuyu bul", True, theme["hud"])
         surf.blit(hint, (config.SCREEN_WIDTH//2 - hint.get_width()//2, 56))
-        # kendi nick/id + bağlantı durumu
-        my_nick = self.save.get("nickname") or "?"
-        my_id = self.save.get("player_id") or "?????"
-        me_txt = self.font_small.render(f"{my_nick}  •  ID: {my_id}", True, theme["hud"])
+        # kendi nick/id + bağlantı durumu — ayrı, ????? yok
+        my_nick = self._get_display_nick()
+        my_id = self._get_display_id()
+        me_txt = self.font_small.render(f"Oyuncu: {my_nick}  •  ID: {my_id}", True, theme["hud"])
         surf.blit(me_txt, (config.SCREEN_WIDTH//2 - me_txt.get_width()//2, 74))
         is_on = False
         try:
