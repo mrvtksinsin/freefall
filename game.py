@@ -31,6 +31,9 @@ class Game:
             self.save["account_token"] = None
             self.save["account_mode"] = "guest"
         self.player = Player(config.SCREEN_WIDTH//2 - config.PLAYER_W//2, 120)
+        # FAZ6: set weapon from save
+        try: self.player.attack_weapon = self.save.get("equipped_weapon","fist")
+        except: pass
         self.camera = Camera()
         self.camera.reset(self.player.y)
         self.world = World()
@@ -41,8 +44,7 @@ class Game:
         self.prev_state = "menu"
         self.paused = False
         self.death_timer = 0.0
-        self.izmir_marsi_playing = False
-        self.izmir_marsi_timer = 0.0
+        # (FAZ14) legacy march kaldirildi — M artik genel music toggle
 
         self.level = 1
         self.level_info = config.LEVELS[0]
@@ -58,6 +60,9 @@ class Game:
         self.level_complete_data = None  # dict for screen
         self.ending_anim = 0.0
         self.ending_timer = 0.0
+        # FAZ12: final cinematic
+        self.final_cinematic_timer = 0.0
+        self.final_cinematic_stage = 0
         self.levels_index = 0  # seçim ekranı cursor
         self.levels_scroll = 0
 
@@ -114,7 +119,7 @@ class Game:
         self._game_data_dirty = False
 
         self.menu_index = 0
-        self.menu_options = ["OYNA", "BÖLÜMLER", "KARAKTERLER", "MAGAZA", "ENVANTER", "TEMALAR", "AYARLAR", "NASIL OYNANIR?", "CIKIS"]
+        self.menu_options = ["OYNA", "BÖLÜMLER", "KARAKTERLER", "MAGAZA", "ENVANTER", "TEMALAR", "AYARLAR", "NASIL OYNANIR?", "İSTATİSTİKLER", "BAŞARIMLAR", "HİKAYE", "CIKIS"]
         self.shop_tab = 0
         self.shop_index = 0
         self.shop_scroll = 0  # mağaza liste kaydırma (piksel)
@@ -124,9 +129,10 @@ class Game:
         self.inv_scroll = 0  # envanter liste kaydırma (piksel)
         self.theme_index = 0
 
-        # settings slider index
-        self.settings_index = 0  # 0 master,1 music,2 sfx,3 tutorial toggle,4 geri
-        self.settings_items = ["MASTER", "MUSIC", "SFX", "TUTORIAL", "GERI"]
+        # settings slider index - FAZ13: 3 audio + 1 tutorial + 3 PC (fullscreen/fps/res) + controls info + geri = 9
+        self.settings_index = 0  # 0 master,1 music,2 sfx,3 tutorial,4 fullscreen,5 fps,6 resolution,7 controls,8 geri
+        self.settings_items = ["MASTER", "MUSIC", "SFX", "TUTORIAL", "FULLSCREEN", "FPS", "RESOLUTION", "CONTROLS", "GERI"]
+        self._display_changed = False  # FAZ13: main loop icin display yenileme bayragi
 
         self.font_small = None
         self.font_med = None
@@ -143,15 +149,74 @@ class Game:
         self.help_open = False
         self.help_pause_prev = None
 
-        # apply saved audio settings
+        # Polish — combo / coin / notifications / menu bg / intro / lore
+        self.combo = 0
+        self.combo_timer = 0.0
+        self.combo_max = 0
+        self.shake = 0.0  # FAZ3: hafif screen shake (dikey, cap'li)
+        self._sfx_cd = {}  # FAZ3: ses spam engelleme (name -> kalan süre)
+        self._near_cd = 0.0  # FAZ3: near-miss global cooldown
+        self._near_seen = set()  # FAZ3: aynı engelde spam engelle (id set, cap'li)
+        self._warn_cd = 0.0  # FAZ3: monster uyarı sesi cooldown
+        self.floating_texts = []  # [{x,y,txt,life,alpha}]
+        self.notifications = []  # [{txt,life}]
+        # FAZ5: economy/run tracking (transient, not saved)
+        self.level_run_base = 0
+        self.level_run_combo_bonus = 0
+        self.level_run_risk_bonus = 0
+        self.level_run_near = 0
+        self.level_run_start_total = 0
+        self._shop_flash = {}  # FAZ5: shop purchase flash (item_id -> timer)
+        self._hud_coin_flash = 0.0  # FAZ5: HUD coin pop
+        self._monster_close = 0.0  # FAZ9: monster proximity 0..1 for vignette/shake
+        self.menu_bg_time = 0.0
+        self.menu_particles = []  # low-cost menu bg (max 15)
+        self._logo_cache = {}  # theme_id -> title surf (font render cache)
+        self._btn_press_idx = -1
+        self._btn_press_t = 0.0
+        self._menu_enter_t = 1.0  # logo giriş efekti (0->1)
+        self.level_intro_timer = 0.0
+        self.level_intro_data = None
+        self.death_flash = 0.0
+        self.finish_flash = 0.0
+        self.vs_bot_name = "BOT"
+        self.intro_done = self.save.get("intro_shown", False)
+        self.intro_timer = 0.0
+        self.intro_state = "logo" if not self.intro_done else "skip"
+        # FAZ11: opening story (2-4s, ESC skip, FREEFALL logo ile çakışmaz)
+        self.opening_shown = self.save.get("opening_shown", False)
+        self.opening_timer = 0.0
+        self.opening_state = "opening" if not self.opening_shown else "skip"
+        self.easter_egg_timer = 0.0
+        # Lore kısa metinler (23 bölüm için)
+        self.lore_texts = {
+            1: "Yukarıda gökyüzü vardı. Şimdi sadece düşüş var.",
+            4: "Buradan sonrası daha sıcak. Kaya eriyor.",
+            5: "Soğuk kemiklerine işliyor. Nefesin buhar oluyor.",
+            6: "Işık yok. Sadece derinliğin sesi var.",
+            9: "Bir zamanlar burada kahve kokusu vardı.",
+            11: "Sarı ışık hiç sönmüyor. Zaman yok gibi.",
+            15: "Metal gıcırdıyor. Fabrika hâlâ çalışıyor.",
+            23: "En alttasın. Monster sustu. Bitti mi?",
+        }
+
+        # apply saved audio settings (FAZ14: music_enabled dahil)
         try:
             s = self.save.get("settings", {})
             audio.set_master(s.get("master", 0.7))
             audio.set_music(s.get("music", 0.5))
             audio.set_sfx(s.get("sfx", 0.8))
+            # FAZ14: M toggle persistent
+            audio.music_enabled = bool(s.get("music_enabled", True))
         except:
             pass
         audio.load_or_generate()
+        # FAZ14: ana menu rock'i hazirla (lazy — ilk menu'de calacak)
+        try:
+            if audio.music_enabled and self.state == "account_gate":
+                # account gate'de sessiz baslar, menu'ye gecince calacak
+                pass
+        except: pass
 
     def init_fonts(self):
         # cache fonts once
@@ -173,6 +238,8 @@ class Game:
         """ESC ile ana menüye dönüş — tüm döngüleri temizle, save et."""
         self.paused = False
         self.state = "menu"
+        try: self._menu_enter_t = 0.0
+        except: pass
         self.death_timer = 0.0
         self.level_up_anim = 0.0
         self.level_mode = None
@@ -190,8 +257,24 @@ class Game:
                 self.online_mgr.set_online_mode(False)
         except Exception:
             pass
+        # FAZ4: menuye donuste muzik fade out (bolum muzigi) — FAZ14: menu rock'a gecis
         try:
-            audio.stop_izmir_marsi()
+            audio.stop_music(fade_out=0.35)
+            audio.set_tension(0.0)
+            # kisa gecikme sonra menu rock baslar (update'de de tetiklenir, ama burada da dene)
+            if audio.music_enabled:
+                # fade out bitmeden menu rock'i baslatma — 0.35s sonra update'de baslayacak
+                pass
+        except: pass
+        # FAZ6: combat reset
+        try:
+            self.player.attack_timer=0; self.player.attack_cooldown=0; self.player.attack_phase="idle"; self.player._attack_hit_done=set()
+            self.shake=0
+        except: pass
+        # FAZ14: tehdit muzigi sustur
+        try:
+            audio.set_tension(0.0)
+            audio.stop_threat(fade_out=0.35)
         except: pass
         # ses/efekt temizliği — pause'taki timer'lar durur, update artık çalışmaz
         try:
@@ -233,13 +316,13 @@ class Game:
         return True
 
     def _get_online_nick(self):
-        """ONLINE için doğru nick: yerel hesap varsa account_username, yoksa nickname."""
+        """ONLINE için doğru nick: yerel hesap varsa account_username, yoksa nickname. ID'yi nick sanma."""
         if self.save.get("account_mode") == "account":
             uname = str(self.save.get("account_username") or "").strip()
-            if save_system.is_valid_nick(uname):
+            if save_system.is_valid_nick(uname) and not save_system.is_valid_player_id(uname):
                 return uname
         nick = str(self.save.get("nickname") or "").strip()
-        if save_system.is_valid_nick(nick):
+        if save_system.is_valid_nick(nick) and not save_system.is_valid_player_id(nick):
             return nick
         return nick or "Oyuncu"
 
@@ -257,19 +340,33 @@ class Game:
         return "—"
 
     def _get_display_nick(self):
-        """UI için nick: hesaplı ise account_username öncelikli"""
+        """UI için nick: hesaplı ise account_username öncelikli, ID'yi nick sanma"""
         if self.save.get("account_mode") == "account":
             uname = str(self.save.get("account_username") or "").strip()
-            if save_system.is_valid_nick(uname):
+            if save_system.is_valid_nick(uname) and not save_system.is_valid_player_id(uname):
                 return uname
         nick = str(self.save.get("nickname") or "").strip()
-        return nick if nick else "Oyuncu"
+        if save_system.is_valid_nick(nick) and not save_system.is_valid_player_id(nick):
+            return nick
+        # fallback: account_username if nickname is ID/invalid
+        au = str(self.save.get("account_username") or "").strip()
+        if save_system.is_valid_nick(au) and not save_system.is_valid_player_id(au):
+            return au
+        return "Oyuncu"
 
     def _enter_main_menu(self, first_entry=False):
         """Hesap kapısından ana menüye geç. İlk girişte NASIL OYNANIR? otomatik (§31)."""
         self.state = "menu"
+        try: self._menu_enter_t = 0.0
+        except: pass
         self.menu_index = 0
         self.play_select_msg = ""
+        # FAZ14: menu rock baslat (master/music + music_enabled ile)
+        try:
+            if audio.music_enabled:
+                self._ensure_menu_music()
+            audio.set_tension(0.0)
+        except: pass
         if first_entry and self.save.get("show_how_to_play", True):
             # tek seferlik: açıldığında flag kapatılır, aynı oturumda tekrar açılmaz
             self.save["show_how_to_play"] = False
@@ -439,9 +536,24 @@ class Game:
             # aynen korunur. Token'ı temizle (sync asla çalışmaz).
             self.save["account_mode"] = "account"
             self.save["account_token"] = None
-            self.save["account_username"] = ident
-            if not save_system.is_valid_nick(self.save.get("nickname") or ""):
-                self.save["nickname"] = ident
+            # FAZ6-BUGFIX: ident player_id ise account_username nickname olmalı, ID değil
+            actual_nick = ident
+            if save_system.is_valid_player_id(ident):
+                saved_nick2 = str(self.save.get("nickname") or "").strip()
+                if save_system.is_valid_nick(saved_nick2) and not save_system.is_valid_player_id(saved_nick2):
+                    actual_nick = saved_nick2
+                else:
+                    # fallback: try to find nickname for this ID from save's account_username if valid
+                    au = str(self.save.get("account_username") or "").strip()
+                    if save_system.is_valid_nick(au) and not save_system.is_valid_player_id(au):
+                        actual_nick = au
+            # ensure actual_nick is not a player_id
+            if save_system.is_valid_player_id(actual_nick):
+                actual_nick = str(self.save.get("nickname") or "").strip()
+            self.save["account_username"] = actual_nick
+            if not save_system.is_valid_nick(self.save.get("nickname") or "") or save_system.is_valid_player_id(self.save.get("nickname") or ""):
+                if save_system.is_valid_nick(actual_nick) and not save_system.is_valid_player_id(actual_nick):
+                    self.save["nickname"] = actual_nick
             try: save_system.save_game(self.save)
             except: pass
             self.account_error = ""
@@ -557,6 +669,8 @@ class Game:
             self.save["level_stars"][str(lvl)] = stars
             self.save["level_stars"][lvl] = stars  # int key de
         # bir sonrakini aç
+        # FAZ5: detect newly unlocked characters for notification
+        _prev_chars = set(self.save.get("unlocked_characters", []))
         try:
             save_system.unlock_next_level(self.save, lvl)
         except:
@@ -565,34 +679,217 @@ class Game:
                 self.save["unlocked_levels"].append(nxt)
         save_system.save_game(self.save)
         self._game_mutated()
-        # level_complete verisi
+        try:
+            _new_chars = [c for c in self.save.get("unlocked_characters", []) if c not in _prev_chars]
+            for cid in _new_chars:
+                cname = next((cc["name"] for cc in config.CHARACTERS if cc["id"]==cid), cid)
+                self._add_notification(f"YENI KARAKTER: {cname}!", (255,215,0))
+                self._play_sfx_cd("unlock", cd=0.3, volume=0.8)
+                # small levelup particle
+                try: self.particles.emit_levelup(self.player.x+self.player.w//2, self.player.y)
+                except: pass
+            if _new_chars:
+                # also check theme unlock if any (future)
+                pass
+        except: pass
+        # FAZ5: reward breakdown (base/combo/risk/near) - gercek degerler
+        try:
+            _base = int(getattr(self, 'level_run_base', coins))
+            _combo_b = int(getattr(self, 'level_run_combo_bonus', 0))
+            _risk_b = int(getattr(self, 'level_run_risk_bonus', 0))
+            _near = int(getattr(self, 'level_run_near', 0))
+            # fallback if run tracking not used (e.g., old save)
+            if _base == 0 and coins > 0:
+                _base = int(coins - _combo_b - _risk_b)
+                if _base < 0: _base = int(coins)
+        except:
+            _base = int(coins); _combo_b = 0; _risk_b = 0; _near = 0
+        # level_complete verisi (FAZ5 breakdown)
         self.level_complete_data = {
             "level": lvl,
             "name": self.level_info["name"],
             "coins": coins,
+            "base": _base,
+            "combo_bonus": _combo_b,
+            "risk_bonus": _risk_b,
+            "near_count": _near,
+            "earned": int(_base + _combo_b + _risk_b),
             "total_coins": self.save.get("total_coins",0),
             "distance": self.player.distance_px / config.PIXELS_PER_METER,
             "stars": stars,
             "is_final": lvl >= len(config.LEVELS),
         }
+        # istatistik & başarım
+        try:
+            stats = self.save.setdefault("statistics", {})
+            stats["levels_completed"] = int(stats.get("levels_completed",0)) + 1
+            stats["total_sections"] = int(stats.get("total_sections",0)) + 1
+            if stars >= 3:
+                stats["total_coins_collected"] = int(self.save.get("total_coins",0))
+            # vs değil, normal bölüm
+            self._check_achievements()
+        except: pass
+        self._add_notification(f"BÖLÜM {lvl} TAMAMLANDI!", (80,220,120))
+        if lvl < len(config.LEVELS):
+            self._add_notification(f"BÖLÜM {lvl+1} AÇILDI!", (255,215,0))
         # canavar durdur
         try:
             audio.play("levelup")
             self.particles.emit_levelup(self.player.x + self.player.w//2, self.player.y)
         except: pass
         if lvl >= len(config.LEVELS):
-            self.state = "ending"
+            # FAZ12: FINAL cinematic - reward korunur, cinematic_seen kontrolü
+            if not self.save.get("final_cinematic_seen", False):
+                self.state = "final_cinematic"
+                self.final_cinematic_timer = 0.0
+                self.final_cinematic_stage = 0
+            else:
+                # zaten görüldü, direkt level_complete
+                self.state = "level_complete"
+                self.level_complete_timer = 0.90
             self.ending_anim = 0.0
             self.ending_timer = 0.0
-            self.camera.y -= 12  # hafif sinematik başla
+            self.camera.y -= 12
+            # reward zaten kaydedildi, final_completed True
         else:
             self.state = "level_complete"
             self.level_complete_timer = 0.0
             self.level_up_anim = 0.0
+            # FAZ7: finish bounce + flash
+            try:
+                self.player.squash = 0.16
+                self.finish_flash = 0.7
+                self.particles.emit_levelup(self.player.x+self.player.w//2, self.player.y)
+            except: pass
+            # FAZ6: clear attack on finish
+            try: self.player.attack_timer=0; self.player.attack_phase="idle"
+            except: pass
+
+    def _add_notification(self, txt, col=(255,215,0)):
+        try:
+            self.notifications.append({"txt": txt, "life": 2.2, "col": col})
+            if len(self.notifications) > 4:
+                self.notifications = self.notifications[-4:]
+        except: pass
+
+    def _check_achievements(self):
+        try:
+            ach = self.save.setdefault("achievements", {})
+            stats = self.save.get("statistics", {})
+            # İlk düşüş
+            if 1 in self.save.get("completed_levels",[]) and not ach.get("first_fall"):
+                ach["first_fall"]=True
+                self._add_notification("🏆 BAŞARIM: İLK ADIM!", (255,215,0))
+                self._play_sfx_cd("unlock", cd=0.3, volume=0.8)
+            # 5 bölüm
+            if len(self.save.get("completed_levels",[])) >= 5 and not ach.get("deep10b"):
+                ach["deep10b"]=True
+                self._add_notification("🏆 YÜKSELİŞ: 5 BÖLÜM!", (120,220,255))
+                self._play_sfx_cd("unlock", cd=0.3, volume=0.8)
+            # 10 bölüm
+            if len(self.save.get("completed_levels",[])) >= 10 and not ach.get("deep10"):
+                ach["deep10"]=True
+                self._add_notification("🏆 KAÇIŞ: 10 BÖLÜM!", (120,200,255))
+                self._play_sfx_cd("unlock", cd=0.3, volume=0.8)
+            # Final
+            if self.save.get("final_completed") and not ach.get("final"):
+                ach["final"]=True
+                self._add_notification("🏆 ZİRVE: 23 BÖLÜM!", (255,100,100))
+                self._play_sfx_cd("levelup", cd=0.3, volume=0.8)
+            # Combo 6
+            if self.combo_max >= 6 and not ach.get("combo6"):
+                ach["combo6"]=True
+                self._add_notification("🏆 KOMBO USTASI!", (180,255,180))
+                self._play_sfx_cd("combo", cd=0.3, volume=0.8)
+            # 100 coin
+            if self.save.get("total_coins",0) >= 100 and not ach.get("coin100"):
+                ach["coin100"]=True
+                self._add_notification("🏆 HAZİNE AVCISI: 100 COIN!", (255,215,0))
+                self._play_sfx_cd("bonus", cd=0.3, volume=0.8)
+            # 10 eşya
+            if len(self.save.get("owned_items",[])) >= 10 and not ach.get("collector"):
+                ach["collector"]=True
+                self._add_notification("🏆 KOLEKSİYONCU: 10 EŞYA!", (200,180,120))
+                self._play_sfx_cd("unlock", cd=0.3, volume=0.8)
+            # 20 eşya
+            if len(self.save.get("owned_items",[])) >= 20 and not ach.get("full_gear"):
+                ach["full_gear"]=True
+                self._add_notification("🏆 TAM DONANIM: 20 EŞYA!", (180,220,255))
+                self._play_sfx_cd("unlock", cd=0.3, volume=0.8)
+            save_system.save_game(self.save)
+        except: pass
+
+    # ---------- FAZ5 helpers ----------
+    def _play_sfx_cd(self, name, cd=0.14, volume=1.0):
+        try:
+            if self._sfx_cd.get(name, 0) > 0:
+                return False
+            audio.play(name, volume)
+            self._sfx_cd[name] = cd
+            return True
+        except:
+            return False
+
+    def _reset_run_stats(self):
+        try:
+            self.level_run_base = 0
+            self.level_run_combo_bonus = 0
+            self.level_run_risk_bonus = 0
+            self.level_run_near = 0
+            self.level_run_start_total = int(self.save.get("total_coins",0))
+            self._near_seen = set()
+            self._near_cd = 0.0
+            self.combo = 0
+            self.combo_timer = 0.0
+        except: pass
+
+    def _check_near_miss(self):
+        if getattr(self, '_near_cd', 0) > 0:
+            return
+        if getattr(self.player, 'on_ground', False) or not getattr(self.player, 'alive', True):
+            return
+        if self.state not in ("playing", "vs_bot", "vs_online"):
+            return
+        try:
+            px = self.player.x; py = self.player.y; pw = self.player.w; ph = self.player.h
+            for o in self.world.obstacles:
+                key = (int(o.x), int(o.y), int(o.width))
+                if key in self._near_seen:
+                    continue
+                if py + ph <= o.top or py >= o.bottom:
+                    continue
+                gap_left = o.left - (px + pw)
+                gap_right = px - o.right
+                is_near = False
+                if 0 < gap_left < 11:
+                    is_near = True
+                elif 0 < gap_right < 11:
+                    is_near = True
+                if is_near:
+                    self._near_cd = 0.38
+                    self._near_seen.add(key)
+                    if len(self._near_seen) > 64:
+                        try: self._near_seen.pop()
+                        except: pass
+                    self.combo = getattr(self, 'combo', 0) + 1
+                    self.combo_timer = 1.6
+                    self.combo_max = max(getattr(self, 'combo_max',0), self.combo)
+                    self.level_run_near = getattr(self, 'level_run_near', 0) + 1
+                    try:
+                        self.floating_texts.append({"x": self.player.x+self.player.w//2, "y": self.player.y-12, "txt": "NEAR MISS! + COMBO", "life": 0.7, "alpha": 255})
+                        self._add_notification("NEAR MISS!", (120,200,255))
+                        self._play_sfx_cd("near_miss", cd=0.2, volume=0.7)
+                        self.particles.emit_coin(self.player.x+self.player.w//2, self.player.y+self.player.h//2, 1)
+                        self.shake = min(2.0, getattr(self, 'shake',0)+0.35)
+                    except: pass
+                    break
+        except: pass
 
     def start_game(self):
         # Sonsuz mod — canavar yok
         self.player.reset(config.SCREEN_WIDTH//2 - config.PLAYER_W//2, 80)
+        try: self.player.attack_weapon = self.save.get("equipped_weapon","fist")
+        except: pass
         self.camera.reset(self.player.y)
         self.world.reset()
         self.particles = ParticleSystem()
@@ -608,6 +905,10 @@ class Game:
         self.vs_finish_y = None
         self.vs_result = None
         self.update_level(force=True)
+        # FAZ4: sonsuz mod muzik (level_info guncel sonra)
+        try:
+            self._update_level_music(self.level_info.get("name", "HAVA"), force=True)
+        except: pass
 
     def get_level_target_px(self, lvl):
         # lvl 1..22 -> bitiş mesafesi (px)
@@ -625,6 +926,8 @@ class Game:
                 self.level_info = e
                 break
         self.player.reset(config.SCREEN_WIDTH//2 - config.PLAYER_W//2, 80)
+        try: self.player.attack_weapon = self.save.get("equipped_weapon","fist")
+        except: pass
         self.camera.reset(self.player.y)
         self.world.reset()
         # world'ün level_name'i doğru olsun diye next_gen_y'yi level başlangıcına ayarla
@@ -652,6 +955,25 @@ class Game:
             self.save["unlocked_levels"].append(lvl)
             self.save["unlocked_levels"] = sorted(set(self.save["unlocked_levels"]))
             save_system.save_game(self.save)
+        # FAZ5: run stats reset
+        try: self._reset_run_stats()
+        except: pass
+        # FAZ11: level intro (first time only)
+        try:
+            seen = self.save.get("seen_lore", [])
+            if lvl not in seen:
+                self.level_intro_active = True
+                self.level_intro_timer = 0.0
+            else:
+                self.level_intro_active = False
+                self.level_intro_timer = 0.0
+        except:
+            self.level_intro_active = False
+            self.level_intro_timer = 0.0
+        # FAZ4: bolum muzik secimi (same-key restart yok)
+        try:
+            self._update_level_music(self.level_info.get("name", "HAVA"))
+        except: pass
 
     def update_level(self, force=False):
         dist_m = self.player.distance_px / config.PIXELS_PER_METER
@@ -682,6 +1004,10 @@ class Game:
             if not force and new_level > old_level:
                 self.level_up_anim = 2.2
                 audio.play("levelup")
+                # FAZ4: endless seviye muzik degisimi (music_key farkliysa crossfade)
+                try:
+                    self._update_level_music(self.level_info.get("name", "HAVA"))
+                except: pass
                 # hangi karakter açıldı?
                 for ch in config.CHARACTERS:
                     if ch["level"] == new_level:
@@ -730,6 +1056,40 @@ class Game:
                 return c
         return config.CHARACTERS[0]
 
+    def _get_theme(self):
+        try:
+            tid = self.save.get("theme", "beyaz")
+            for t in config.THEMES:
+                if t["id"] == tid:
+                    return t
+            return config.THEMES[0]
+        except:
+            return config.THEMES[0]
+
+    def _update_level_music(self, level_name=None, force=False):
+        try:
+            ln = level_name or getattr(self.level_info, "get", lambda k,d=None: None)("name") if isinstance(self.level_info, dict) else getattr(self.level_info, "name", None)
+            if not ln:
+                ln = self.level_info.get("name", "HAVA") if isinstance(self.level_info, dict) else "HAVA"
+            # audio handles same-key no-restart
+            audio.play_music_for_level(ln, fade_in=0.8 if not force else 0.6)
+        except: pass
+
+    def _ensure_menu_music(self, force=False):
+        """FAZ14: ana menu dark rock — telifsiz procedural, MUSIC volumu ile, restart yok."""
+        try:
+            if not audio.music_enabled or not audio.enabled:
+                return False
+            # zaten menu rock caliyorsa tekrar baslatma
+            if not force and audio.get_current_music_key() == "menu_rock":
+                return False
+            audio.play_music_key("menu_rock", fade_in=0.9)
+            # tension'i sifirla — menu'de threat yok
+            audio.set_tension(0.0)
+            return True
+        except:
+            return False
+
     def update(self, dt, keys_held):
         # transition alpha
         if self.transition_target is not None:
@@ -737,13 +1097,117 @@ class Game:
             if self.transition >= 1:
                 self.transition = 0
                 self.transition_target = None
-        # İzmir Marşı timer — her durumda akar
-        if self.izmir_marsi_timer > 0:
-            self.izmir_marsi_timer -= dt
-            if self.izmir_marsi_timer <= 0:
-                self.izmir_marsi_playing = False
-                try: audio.stop_izmir_marsi()
+        # FAZ4: audio fade/tension update (her frame, ucuz)
+        try:
+            audio.update(dt)
+            # monster tension -> audio
+            if getattr(self, 'monster', None) and getattr(self, 'level_mode', None) is not None and getattr(self.player, 'alive', True):
+                try:
+                    gap = self.player.y - self.monster.y
+                    # 220 ideal, <180 gerilim baslar, <90 yuksek
+                    if gap < 180:
+                        tens = (180 - gap) / 180.0
+                        tens = max(0, min(1, tens))
+                    else:
+                        tens = 0.0
+                    audio.set_tension(tens)
+                except:
+                    audio.set_tension(0.0)
+            else:
+                audio.set_tension(0.0)
+                # FAZ14: menu'de dark rock (telifsiz) — intro/cinematic degilse baslat
+                if self.state == "menu" and getattr(self, 'intro_state','skip')=='skip' and getattr(self, 'opening_state','skip')=='skip' and not self.help_open:
+                    if audio.music_enabled and audio.get_current_music_key() not in ("menu_rock",):
+                        # sadece bir kez, fade ile
+                        try: self._ensure_menu_music()
+                        except: pass
+        except: pass
+        # Intro — ilk açılışta kısa, atlanabilir
+        if getattr(self, 'intro_state', 'skip') == "logo":
+            self.intro_timer += dt
+            if self.intro_timer > 2.2:
+                self.intro_state = "skip"
+                self.save["intro_shown"] = True
+                try: save_system.save_game(self.save)
                 except: pass
+            return
+        # FAZ12: opening cinematic 7.2s (6-9s, ESC skip)
+        if getattr(self, 'opening_state', 'skip') == "opening":
+            self.opening_timer += dt
+            if self.opening_timer > 7.2:
+                self.opening_state = "skip"
+                self.save["opening_shown"] = True
+                try: save_system.save_game(self.save)
+                except: pass
+            return
+        # Combo timer + floating texts + notifications + menu bg + stats play time
+        if getattr(self, 'combo_timer', 0) > 0:
+            self.combo_timer -= dt
+            if self.combo_timer <= 0:
+                self.combo = 0
+        # FAZ5: near-miss / sfx cd / shake decay
+        if getattr(self, '_near_cd', 0) > 0:
+            self._near_cd = max(0, self._near_cd - dt)
+        if getattr(self, '_warn_cd', 0) > 0:
+            self._warn_cd = max(0, self._warn_cd - dt)
+        if getattr(self, 'shake', 0) > 0:
+            self.shake = max(0, self.shake - dt*3.5)
+        if getattr(self, '_hud_coin_flash', 0) > 0:
+            self._hud_coin_flash = max(0, self._hud_coin_flash - dt*2.5)
+        # sfx cd dict
+        if hasattr(self, '_sfx_cd') and self._sfx_cd:
+            for k in list(self._sfx_cd.keys()):
+                self._sfx_cd[k] = max(0, self._sfx_cd[k] - dt)
+                if self._sfx_cd[k] <= 0:
+                    self._sfx_cd.pop(k, None)
+        # shop flash
+        if hasattr(self, '_shop_flash') and self._shop_flash:
+            for k in list(self._shop_flash.keys()):
+                self._shop_flash[k] = max(0, self._shop_flash[k] - dt)
+                if self._shop_flash[k] <= 0:
+                    self._shop_flash.pop(k, None)
+        # floating texts
+        if hasattr(self, 'floating_texts'):
+            for ft in self.floating_texts:
+                ft['y'] -= 28*dt
+                ft['life'] -= dt
+                ft['alpha'] = int(255 * max(0, ft['life']/0.9))
+            self.floating_texts = [f for f in self.floating_texts if f['life'] > 0]
+        # notifications
+        if hasattr(self, 'notifications'):
+            for n in self.notifications:
+                n['life'] -= dt
+            self.notifications = [n for n in self.notifications if n['life'] > 0]
+        # menu bg time + low-cost particles (max 15)
+        if hasattr(self, 'menu_bg_time'):
+            self.menu_bg_time += dt
+            if self.state == "menu" and len(getattr(self, 'menu_particles', [])) < 15 and self.menu_bg_time > 0.12:
+                self.menu_bg_time = 0
+                try:
+                    import random as _rnd
+                    self.menu_particles.append({"x": _rnd.randint(20,880), "y": _rnd.randint(-20,700), "vx": _rnd.uniform(-12,12), "vy": _rnd.uniform(8,18), "life": 6.0, "col": (255,215,0) if _rnd.random()<0.3 else (180,220,255)})
+                except: pass
+            for p in getattr(self, 'menu_particles', []):
+                p['x'] += p.get('vx',0)*dt
+                p['y'] += p.get('vy',0)*dt
+                p['life'] -= dt
+            self.menu_particles = [p for p in getattr(self,'menu_particles',[]) if p['life']>0 and p['y']<720]
+        # stats play time
+        try:
+            if self.state in ("playing","vs_bot","vs_online") and not self.paused:
+                self.save.setdefault("statistics", {})["total_play_time"] = float(self.save["statistics"].get("total_play_time",0) + dt)
+        except: pass
+        # death/finish flash
+        if getattr(self, 'death_flash', 0) > 0:
+            self.death_flash -= dt*2.2
+        if getattr(self, 'finish_flash', 0) > 0:
+            self.finish_flash -= dt*1.8
+        # menu giriş + buton basma zamanlayıcıları
+        if getattr(self, '_menu_enter_t', 1.0) < 1.0:
+            self._menu_enter_t = min(1.0, self._menu_enter_t + dt*3.0)
+        if getattr(self, '_btn_press_t', 0.0) > 0:
+            self._btn_press_t = max(0.0, self._btn_press_t - dt)
+        # (FAZ14) legacy timer kaldirildi
 
         # Oyun verisi sync — throttled (5sn) + pending retry (sadece hesaplı)
         self._sync_timer += dt
@@ -809,23 +1273,50 @@ class Game:
         # Bölüm tamamlama / final ekranları — input bekle, timer ilerlet
         if self.state == "level_complete":
             self.level_complete_timer += dt
-            self.particles.update(dt, self.camera.y, self.level_info["name"])
+            self.particles.update(dt, self.camera.y, self.level_info["name"], self._get_theme())
             if self.level_up_anim > 0:
                 self.level_up_anim -= dt
             return
         if self.state == "ending":
             self.ending_timer += dt
             self.ending_anim += dt
-            self.particles.update(dt, self.camera.y, self.level_info["name"])
+            self.particles.update(dt, self.camera.y, self.level_info["name"], self._get_theme())
             # sinematik kamera — yavaşça yukarı kaydır
             self.camera.y -= 42 * dt
             if self.camera.y < 0:
                 self.camera.y = 0
             return
+        if self.state == "final_cinematic":
+            self.final_cinematic_timer += dt
+            self.ending_anim += dt
+            self.particles.update(dt, self.camera.y, self.level_info["name"], self._get_theme())
+            self.camera.y -= 7 * dt
+            if self.camera.y < 0:
+                self.camera.y = 0
+            if self.final_cinematic_timer > 19.5:
+                # auto to level_complete with buttons visible
+                self.state = "level_complete"
+                self.level_complete_timer = 0.90
+                self.save["final_cinematic_seen"] = True
+                try: save_system.save_game(self.save)
+                except: pass
+            return
         if self.state == "playing":
             if self.paused:
                 # tutorial kapama vs yine de input alabilir
                 return
+            # FAZ11: level intro timer (first time 1.6s, ESC skip handled in handle_event)
+            if getattr(self, 'level_intro_active', False):
+                self.level_intro_timer += dt
+                if self.level_intro_timer > 1.6:
+                    self.level_intro_active = False
+                    try:
+                        if self.level_mode not in self.save.get("seen_lore", []):
+                            self.save["seen_lore"].append(self.level_mode)
+                            self.save["seen_lore"] = sorted(set(self.save["seen_lore"]))
+                            save_system.save_game(self.save)
+                    except: pass
+                # still update camera/particles but not blocking input
             self.player.handle_input(keys_held, dt)
             self.world.ensure_generated(self.camera.y)
             self.world.update_coins(dt)
@@ -836,20 +1327,79 @@ class Game:
             elif evt == "death":
                 audio.play("death")
                 self.particles.emit_death(self.player.x + self.player.w//2, self.player.y + self.player.h//2)
+                # FAZ9: death atmosphere
+                try: self.death_flash = 1.0; self.shake = 1.2
+                except: pass
 
+            # FAZ5: near-miss check (after physics, before coin)
+            try: self._check_near_miss()
+            except: pass
             gained = self.world.check_coin_collection(self.player.rect)
             if gained:
+                # FAZ5: base tracking + combo + risk bonus (cap'li)
+                _base = int(gained)
+                self.combo = getattr(self, 'combo', 0) + 1
+                self.combo_timer = 1.6
+                self.combo_max = max(getattr(self, 'combo_max', 0), self.combo)
+                try:
+                    self.save["statistics"]["max_combo"] = max(self.save["statistics"].get("max_combo",0), self.combo)
+                    self.save["statistics"]["total_coins_collected"] = int(self.save["statistics"].get("total_coins_collected",0) + _base)
+                except: pass
+                bonus = 0
+                if self.combo >= 4:
+                    bonus = 1 if self.combo < 7 else 2
+                    gained += bonus
+                # FAZ5: monster yakin risk bonusu (cap 6 per level)
+                risk = 0
+                if self.level_mode is not None and getattr(self, 'monster', None) and getattr(self.player, 'alive', True):
+                    try:
+                        gap = self.player.y - self.monster.y
+                        if 0 < gap < 155:
+                            if getattr(self, 'level_run_risk_bonus', 0) < 6:
+                                risk = 1
+                                gained += risk
+                    except: pass
+                # run tracking
+                try:
+                    self.level_run_base = getattr(self, 'level_run_base', 0) + _base
+                    self.level_run_combo_bonus = getattr(self, 'level_run_combo_bonus', 0) + bonus
+                    self.level_run_risk_bonus = getattr(self, 'level_run_risk_bonus', 0) + risk
+                except: pass
                 self.save["total_coins"] += gained
                 self.player.coins += gained
                 self._game_mutated()
-                # coin sesi ve parçacık — value'ye göre yoğunluk
+                # FAZ5: HUD coin flash
+                try: self._hud_coin_flash = 0.45
+                except: pass
+                # floating text + combo + risk
+                try:
+                    _txt = f"+{gained}"
+                    if bonus or risk:
+                        _parts = []
+                        if bonus: _parts.append(f"COMBO+{bonus}")
+                        if risk: _parts.append("RISK+1")
+                        _txt += "  " + " ".join(_parts)
+                    elif self.combo>=2:
+                        _txt += f"  COMBO x{self.combo}"
+                    self.floating_texts.append({"x": self.player.x+self.player.w//2, "y": self.player.y, "txt": _txt, "life": 0.9, "alpha": 255})
+                    if bonus:
+                        self._add_notification(f"COMBO x{self.combo} +{bonus} BONUS!", (255,215,0))
+                        self._play_sfx_cd("combo", cd=0.12, volume=0.7)
+                    if risk:
+                        self._add_notification("RISK BONUS +1!", (255,120,80))
+                        self._play_sfx_cd("bonus", cd=0.15, volume=0.6)
+                except: pass
+                # coin sesi ve parçacık — value'ye göre yoğunluk + FAZ5 extra glow for combo
                 self.particles.emit_coin(self.player.x + self.player.w//2, self.player.y + self.player.h//2, gained)
+                if self.combo >= 6:
+                    try: self.particles.emit_coin(self.player.x+self.player.w//2, self.player.y+self.player.h//2, 1)
+                    except: pass
                 if gained >= 5:
-                    audio.play("coin5")
+                    self._play_sfx_cd("coin5", cd=0.08, volume=1.0)
                 elif gained >= 3:
-                    audio.play("coin5", 0.7)
+                    self._play_sfx_cd("coin5", cd=0.08, volume=0.7)
                 else:
-                    audio.play("coin")
+                    self._play_sfx_cd("coin", cd=0.07, volume=1.0)
 
             self.camera.update(dt, self.player.y, self.player.alive)
             # Bölümlü kaçış modunda canavar ve bitiş
@@ -857,11 +1407,55 @@ class Game:
                 # canavar takip — gerçek tehdit
                 try:
                     self.monster.update(dt, self.player, self.camera.y)
+                    # FAZ9: monster proximity atmosphere (shake/vignette, no AI change)
+                    try:
+                        _gap9 = self.player.y - self.monster.y
+                        if 0 < _gap9 < 180:
+                            if _gap9 < 95:
+                                self.shake = min(1.1, getattr(self, 'shake',0) + dt*1.6)
+                            elif _gap9 < 145:
+                                self.shake = min(0.6, getattr(self, 'shake',0) + dt*0.8)
+                            self._monster_close = (180 - _gap9)/180
+                        else:
+                            self._monster_close = max(0, self._monster_close - dt*1.5)
+                    except:
+                        self._monster_close = 0
+                    # FAZ6: combat hit (gap-based, monster behind)
+                    try:
+                        hb = self.player.get_attack_hitbox()
+                        w = config.get_weapon(self.player.attack_weapon)
+                        gap = self.player.y - self.monster.y
+                        # hit if monster within weapon range behind + horizontal close
+                        if hb is not None and 0 < gap < w["range"] + 90 and abs(self.player.x - self.monster.x) < 72:
+                            aid = getattr(self.player, 'attack_id', 0)
+                            hit_done = getattr(self.player, '_attack_hit_done', set())
+                            key = ("monster", aid)
+                            if key not in hit_done:
+                                hit_done.add(key)
+                                self.player._attack_hit_done = hit_done
+                                self.monster.apply_hit(w["damage"], w["knockback"], w["stagger"])
+                                hit_x = self.monster.x + self.monster.w//2
+                                hit_y = self.monster.y + self.monster.h//2
+                                try: self.particles.emit_hit(hit_x, hit_y, w["id"])
+                                except: pass
+                                self._play_sfx_cd("sword_hit" if w["id"]=="beam_sword" else "punch", cd=0.12, volume=0.8)
+                                try: self.floating_texts.append({"x": hit_x, "y": hit_y-16, "txt": f"HIT! -{w['damage']}", "life": 0.6, "alpha": 255})
+                                except: pass
+                                self.shake = min(2.5, getattr(self, 'shake',0)+ (0.6 if w["id"]=="fist" else 0.9))
+                                # FAZ7: hit recoil
+                                try: self.player.squash = -0.09 if w["id"]=="fist" else -0.06
+                                except: pass
+                                self.combo = getattr(self, 'combo',0)+1
+                                self.combo_timer = 1.6
+                    except: pass
                     if self.monster.check_catch(self.player) and self.player.alive:
                         self.player.alive = False
                         self.player.state = "death"
                         audio.play("death")
                         self.particles.emit_death(self.player.x + self.player.w//2, self.player.y + self.player.h//2)
+                        # FAZ9: death atmosphere
+                        try: self.death_flash = 1.0; self.shake = 1.4; self.player.squash = 0.18
+                        except: pass
                         # canavar ısırma efekti
                         for _ in range(12):
                             self.particles.emit_coin(self.monster.x+self.monster.w//2, self.monster.y+self.monster.h//2, 1)
@@ -880,13 +1474,16 @@ class Game:
                 self._game_mutated()
 
             if not self.player.alive:
+                # FAZ6: clear attack on death
+                try: self.player.attack_timer=0; self.player.attack_phase="idle"
+                except: pass
                 self.death_timer += dt
                 if self.death_timer > 1.0:
                     self.state = "gameover"
                     save_system.save_game(self.save)
 
             # particles
-            self.particles.update(dt, self.camera.y, self.level_info["name"])
+            self.particles.update(dt, self.camera.y, self.level_info["name"], self._get_theme())
             if self.level_up_anim > 0:
                 self.level_up_anim -= dt
 
@@ -913,7 +1510,7 @@ class Game:
         # vs_result — KAZANDIN/KAYBETTİN ekranı bekleme
         if self.state == "vs_result":
             self.vs_finish_timer += dt
-            self.particles.update(dt, self.camera.y, self.level_info["name"])
+            self.particles.update(dt, self.camera.y, self.level_info["name"], self._get_theme())
             if self.level_up_anim > 0:
                 self.level_up_anim -= dt
             return
@@ -974,6 +1571,9 @@ class Game:
                                 break
                     except:
                         self.vs_remote = None
+            # FAZ5: near-miss (vs)
+            try: self._check_near_miss()
+            except: pass
             gained=self.world.check_coin_collection(self.player.rect)
             if gained:
                 self.save["total_coins"]+=gained
@@ -993,6 +1593,36 @@ class Game:
                         if gap_bot < gap_player:
                             target = self.vs_bot
                     self.monster.update(dt, target, self.camera.y)
+                    # FAZ9: vs proximity
+                    try:
+                        _gapv = self.player.y - self.monster.y
+                        if 0 < _gapv < 180:
+                            self._monster_close = (180-_gapv)/180
+                        else:
+                            self._monster_close = max(0, self._monster_close - 0.02)
+                    except: pass
+                    # FAZ6: vs combat hit (gap-based)
+                    try:
+                        hb = self.player.get_attack_hitbox()
+                        w = config.get_weapon(self.player.attack_weapon)
+                        gap = self.player.y - self.monster.y
+                        if hb is not None and 0 < gap < w["range"] + 90 and abs(self.player.x - self.monster.x) < 72:
+                            aid = getattr(self.player, 'attack_id', 0)
+                            hit_done = getattr(self.player, '_attack_hit_done', set())
+                            key = ("monster_vs", aid)
+                            if key not in hit_done:
+                                hit_done.add(key)
+                                self.player._attack_hit_done = hit_done
+                                self.monster.apply_hit(w["damage"], w["knockback"]*0.7, w["stagger"]*0.7)
+                                hit_x = self.monster.x + self.monster.w//2
+                                hit_y = self.monster.y + self.monster.h//2
+                                try: self.particles.emit_hit(hit_x, hit_y, w["id"])
+                                except: pass
+                                self._play_sfx_cd("sword_hit" if w["id"]=="beam_sword" else "punch", cd=0.12, volume=0.8)
+                                self.shake = min(2.5, getattr(self, 'shake',0)+0.5)
+                                try: self.player.squash = -0.07
+                                except: pass
+                    except: pass
                     # her iki yarışmacı için ayrı catch (global flag kirletmeden)
                     if self.vs_bot and self.vs_bot.alive and self.monster.check_catch_vs(self.vs_bot):
                         self.vs_bot.alive=False
@@ -1002,11 +1632,43 @@ class Game:
                         self.player.alive=False; self.player.state="death"
                         audio.play("death")
                         self.particles.emit_death(self.player.x+self.player.w//2, self.player.y+self.player.h//2)
+                        try: self.death_flash=1.0; self.shake=1.2
+                        except: pass
                         self.monster.caught=True
                 except: pass
             else:
                 try:
                     self.monster.update(dt, self.player, self.camera.y)
+                    # FAZ9: proximity for online
+                    try:
+                        _gap9o = self.player.y - self.monster.y
+                        if 0 < _gap9o < 180:
+                            self._monster_close = (180-_gap9o)/180
+                        else:
+                            self._monster_close = max(0, self._monster_close - 0.02)
+                    except: pass
+                    # FAZ6: combat hit for online/vs
+                    try:
+                        hb = self.player.get_attack_hitbox()
+                        w = config.get_weapon(self.player.attack_weapon)
+                        gap = self.player.y - self.monster.y
+                        if hb is not None and 0 < gap < w["range"] + 90 and abs(self.player.x - self.monster.x) < 72:
+                            aid = getattr(self.player, 'attack_id', 0)
+                            hit_done = getattr(self.player, '_attack_hit_done', set())
+                            key = ("monster_online", aid)
+                            if key not in hit_done:
+                                hit_done.add(key)
+                                self.player._attack_hit_done = hit_done
+                                self.monster.apply_hit(w["damage"], w["knockback"]*0.7, w["stagger"]*0.7)
+                                hit_x = self.monster.x + self.monster.w//2
+                                hit_y = self.monster.y + self.monster.h//2
+                                try: self.particles.emit_hit(hit_x, hit_y, w["id"])
+                                except: pass
+                                self._play_sfx_cd("sword_hit" if w["id"]=="beam_sword" else "punch", cd=0.12, volume=0.8)
+                                self.shake = min(2.5, getattr(self, 'shake',0)+0.5)
+                                try: self.player.squash = -0.07
+                                except: pass
+                    except: pass
                     # bot'u da kontrol et — bot ölürse player kazanır (sadece online/monster modda)
                     if self.state=="vs_bot" and self.vs_bot and self.vs_bot.alive:
                         if self.monster.check_catch(self.vs_bot):
@@ -1016,6 +1678,8 @@ class Game:
                         self.player.alive=False; self.player.state="death"
                         audio.play("death")
                         self.particles.emit_death(self.player.x+self.player.w//2, self.player.y+self.player.h//2)
+                        try: self.death_flash=1.0; self.shake=1.2
+                        except: pass
                 except: pass
             # --- BİTİŞ ÇİZGİSİ — vs_bot ---
             if self.state == "vs_bot" and self.vs_finish_y is not None and self.vs_result is None:
@@ -1043,13 +1707,9 @@ class Game:
                     # döngüyü durdur — vs_result ekranı update'de bekleyecek
                     return
             if not self.player.alive and self.state=="vs_bot" and self.vs_bot and not self.vs_bot.alive:
-                # ikisi aynı anda elendi → deterministik: oyuncu kaybetti
-                self.death_timer+=dt
-                if self.death_timer>1.2:
-                    self.vs_result="lose"
-                    self.state="gameover"
-                    save_system.save_game(self.save)
-            elif not self.player.alive:
+                # ikisi aynı anda elendi → deterministik: oyuncu kaybetti (FAZ16: duplicate block kaldirildi, tek increment)
+                try: self.player.attack_timer=0; self.player.attack_phase="idle"
+                except: pass
                 self.death_timer+=dt
                 if self.death_timer>1.2:
                     self.vs_result="lose"
@@ -1068,7 +1728,7 @@ class Game:
                     except: pass
                     save_system.save_game(self.save)
                     return
-            self.particles.update(dt, self.camera.y, self.level_info["name"])
+            self.particles.update(dt, self.camera.y, self.level_info["name"], self._get_theme())
             # VS'de mesafe rekoru
             dist_m=self.player.distance_px/config.PIXELS_PER_METER
             if dist_m>self.save.get("best_distance",0):
@@ -1078,29 +1738,80 @@ class Game:
     # ---------- event handling ----------
     def handle_event(self, event):
         if event.type == pygame.KEYDOWN:
+            # intro skip (ilk acilis 2.2s, atlanabilir)
+            if getattr(self, 'intro_state', 'skip') == "logo":
+                if event.key in (pygame.K_ESCAPE, pygame.K_SPACE, pygame.K_RETURN):
+                    self.intro_state = "skip"
+                    self.save["intro_shown"] = True
+                    try: save_system.save_game(self.save)
+                    except: pass
+                return
             # NASIL OYNANIR? modal — açıkken her tuşu yakala (ESC/H/ENTER/SPACE kapatır)
             if self.help_open:
                 if event.key in (pygame.K_h, pygame.K_ESCAPE, pygame.K_RETURN, pygame.K_SPACE):
                     self._close_help()
                 return
-            # İzmir Marşı toggle — M tuşu her yerde çalışır (menu/oyun/duraklatıldı)
-            if event.key == pygame.K_m and self.state in ("menu","playing","paused","shop","characters","inventory","themes","settings"):
-                # gameover'da M zaten menu'ye döner, orada marş çalma değil
-                if self.state != "gameover":
-                    self.izmir_marsi_playing = not self.izmir_marsi_playing
-                    if self.izmir_marsi_playing:
-                        audio.play_izmir_marsi(loop=False)
-                        self.izmir_marsi_timer = 13.5
+            # FAZ11: opening story skip
+            if getattr(self, 'opening_state', 'skip') == "opening":
+                if event.key in (pygame.K_ESCAPE, pygame.K_SPACE, pygame.K_RETURN):
+                    self.opening_state = "skip"
+                    self.save["opening_shown"] = True
+                    try: save_system.save_game(self.save)
+                    except: pass
+                return
+            # FAZ14: M — genel MUSIC toggle (legacy march kaldirildi, global muzik)
+            if event.key == pygame.K_m and self.state in ("menu","playing","shop","characters","inventory","themes","settings","levels","play_select","online_menu","lobby","vs_bot","vs_online"):
+                if True:
+                    new_enabled = not getattr(audio, "music_enabled", True)
+                    audio.music_enabled = new_enabled
+                    # persist (backward compat key)
+                    try:
+                        self.save["settings"]["music_enabled"] = bool(new_enabled)
+                        save_system.save_game(self.save)
+                    except: pass
+                    if new_enabled:
+                        # resume appropriate track
+                        try:
+                            if self.state == "menu":
+                                self._ensure_menu_music()
+                            elif self.state in ("playing","paused","vs_bot","vs_online"):
+                                self._update_level_music(self.level_info.get("name","HAVA"))
+                            else:
+                                # generic resume: if no track, start menu rock
+                                if not audio.get_current_music_key():
+                                    self._ensure_menu_music()
+                                else:
+                                    # force re-apply volume (unmute)
+                                    audio._apply_music_volume()
+                                    try: audio._apply_threat_volume()
+                                    except: pass
+                        except: pass
                     else:
-                        audio.stop_izmir_marsi()
-                        self.izmir_marsi_timer = 0
-                    audio.play("click")
+                        try:
+                            audio.stop_music(fade_out=0.35)
+                        except: pass
+                        try:
+                            audio.stop_threat(fade_out=0.35)
+                        except: pass
+                    try: audio.play("click")
+                    except: pass
                     return
             # NASIL OYNANIR? — H tuşu ile her yerden aç
             if event.key == pygame.K_h:
                 if self.state in ("menu","playing","shop","characters","inventory","themes","settings","levels","gameover","play_select","online_menu"):
                     self._open_help()
                     return
+            # FAZ13: F11 fullscreen toggle (guvenli, fallback'li)
+            if event.key == pygame.K_F11:
+                try:
+                    cur = bool(self.save["settings"].get("fullscreen", False))
+                    self.save["settings"]["fullscreen"] = not cur
+                    save_system.save_game(self.save)
+                    self._try_apply_display(fullscreen=not cur)
+                    audio.play("click")
+                except:
+                    pass
+                return
             # global hover/click sound
             if event.key in (pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT):
                 audio.play("hover", 0.6)
@@ -1110,6 +1821,17 @@ class Game:
                     audio.play("click")
 
             if self.state == "playing":
+                # FAZ11: level intro skip (ESC/SPACE/ENTER)
+                if getattr(self, 'level_intro_active', False):
+                    if event.key in (pygame.K_ESCAPE, pygame.K_SPACE, pygame.K_RETURN):
+                        self.level_intro_active = False
+                        try:
+                            if self.level_mode not in self.save.get("seen_lore", []):
+                                self.save["seen_lore"].append(self.level_mode)
+                                self.save["seen_lore"] = sorted(set(self.save["seen_lore"]))
+                                save_system.save_game(self.save)
+                        except: pass
+                        return
                 # paused overlay içindeyken özel tuşlar — ESC artık pause açmaz, doğrudan menu
                 if self.paused:
                     if event.key == pygame.K_SPACE:
@@ -1133,6 +1855,14 @@ class Game:
                 if event.key == pygame.K_SPACE:
                     self.paused = not self.paused
                     audio.play("click")
+                elif event.key == pygame.K_f or event.key == pygame.K_j:
+                    # FAZ6: attack
+                    try:
+                        wid = self.save.get("equipped_weapon","fist")
+                        if self.player.try_attack(wid):
+                            w = config.get_weapon(wid)
+                            self._play_sfx_cd("sword_swing" if wid=="beam_sword" else "punch", cd=0.08, volume=0.7)
+                    except: pass
                 elif event.key == pygame.K_UP or event.key == pygame.K_w:
                     jumped = self.player.try_jump()
                     if jumped:
@@ -1184,6 +1914,18 @@ class Game:
                 self.handle_level_complete_keys(event)
             elif self.state == "ending":
                 self.handle_ending_keys(event)
+            elif self.state == "final_cinematic":
+                self.handle_final_cinematic_keys(event)
+            elif self.state in ("lore",):
+                if event.key == pygame.K_ESCAPE:
+                    self.state = "menu"
+                    try: audio.play("click")
+                    except: pass
+            elif self.state in ("stats", "achievements"):
+                if event.key == pygame.K_ESCAPE:
+                    self.state = "menu"
+                    try: audio.play("click")
+                    except: pass
             elif self.state == "profile_create":
                 self.handle_profile_keys(event)
             elif self.state == "account_gate":
@@ -1209,6 +1951,17 @@ class Game:
                 pass
 
         elif event.type == pygame.MOUSEBUTTONDOWN and event.pos:
+            # FAZ6: left click attack in gameplay
+            if getattr(event, 'button', 1) == 1 and self.state in ("playing","vs_bot","vs_online") and not getattr(self, 'paused', False) and getattr(self.player, 'alive', True):
+                try:
+                    wid = self.save.get("equipped_weapon","fist")
+                    if self.player.try_attack(wid):
+                        w = config.get_weapon(wid)
+                        self._play_sfx_cd("sword_swing" if wid=="beam_sword" else "punch", cd=0.08, volume=0.7)
+                except: pass
+                # still allow handle_mouse for UI, but playing has no UI, so return
+                if self.state in ("playing","vs_bot","vs_online"):
+                    return
             self.handle_mouse(event.pos)
         elif event.type == pygame.MOUSEMOTION:
             self.handle_mouse_hover(event.pos)
@@ -1233,8 +1986,84 @@ class Game:
                     self.levels_index = max(0, self.levels_index-1)
                 else:
                     self.levels_index = min(len(config.LEVELS)-1, self.levels_index+1)
+            elif self.state == "themes":
+                # 4 columns, one row per wheel step
+                steps = max(1, abs(event.y))
+                if event.y > 0:
+                    self.theme_index = max(0, self.theme_index - 4*steps)
+                else:
+                    self.theme_index = min(len(config.THEMES)-1, self.theme_index + 4*steps)
+                try: audio.play("hover",0.3)
+                except: pass
+
+    def _trigger_transition(self, v=0.35):
+        try:
+            self.transition = v
+            self.transition_target = "fade"
+        except: pass
+
+    def _sfx(self, event):
+        """Ses altyapısı haritası — yeni dosya yok, mevcut audio.play kullanılır."""
+        try:
+            if event == "menu_hover":
+                audio.play("hover", 0.5)
+            elif event == "menu_click":
+                audio.play("click")
+            elif event == "theme_select":
+                audio.play("unlock", 0.8)
+            elif event == "locked":
+                audio.play("death", 0.4)
+            elif event == "purchase":
+                audio.play("purchase")
+            elif event == "equip":
+                audio.play("click")
+        except: pass
+
+    def _owned_theme_ids(self):
+        """Tema sahipliği — şu an tümü açık; mağaza bağlantısı için yapı hazır."""
+        try:
+            owned = self.save.get("owned_themes", None)
+            if isinstance(owned, list) and owned:
+                return set(str(x) for x in owned)
+        except: pass
+        return set(t["id"] for t in config.THEMES)
+
+    def _theme_atmosphere(self, surf, theme):
+        """Tema atmosferi — mevcut glow/particle altyapısı, max 2 glow + birkaç çizgi/nokta."""
+        try:
+            tid = theme.get("id", "")
+            glow_c = theme.get("glow", (255, 215, 0, 60))
+            if isinstance(glow_c, (list, tuple)) and len(glow_c) == 4:
+                glow_c3 = (glow_c[0], glow_c[1], glow_c[2])
+            elif isinstance(glow_c, (list, tuple)):
+                glow_c3 = tuple(glow_c[:3])
+            else:
+                glow_c3 = (255, 215, 0)
+            accent = theme.get("accent", glow_c3)
+            # hafif ışık bölgeleri (tema glow/accent, sabit konum — per-frame random yok)
+            h1 = hash(tid + "_a") % 600
+            h2 = hash(tid + "_b") % 600
+            gfx.draw_glow(surf, (150 + h1 % 200, 140), 70, glow_c3, 12)
+            gfx.draw_glow(surf, (750 - h2 % 200, 560), 80, accent if isinstance(accent, tuple) else glow_c3, 10)
+            # çok hafif geometri (sadece bazı temalar)
+            if tid == "industrial_gray":
+                for yy in (210, 420, 560):
+                    pygame.draw.line(surf, (120, 125, 135, 60), (60, yy), (180, yy), 1)
+                    pygame.draw.line(surf, (120, 125, 135, 60), (720, yy + 20), (840, yy + 20), 1)
+            elif tid == "retro_arcade":
+                for ix in range(6):
+                    for iy in range(3):
+                        px = 80 + ix * 24 + (hash(tid) % 7)
+                        py = 600 + iy * 12
+                        pygame.draw.rect(surf, accent if isinstance(accent, tuple) else (0, 230, 200), (px, py, 5, 5))
+            elif tid == "monochrome":
+                pygame.draw.line(surf, (150, 150, 150, 70), (0, 350), (config.SCREEN_WIDTH, 350), 1)
+            elif tid in ("neon_cyan", "retro_arcade", "ocean"):
+                pygame.draw.line(surf, (*glow_c3, 50) if len(glow_c3) == 3 else glow_c3, (0, 120), (config.SCREEN_WIDTH, 120), 1)
+        except: pass
 
     def activate_menu(self):
+        self._trigger_transition(0.35)
         opt = self.menu_options[self.menu_index]
         if opt == "OYNA":
             # VS seçim ekranı — ONLINE / BİLGİSAYARA KARŞI
@@ -1282,6 +2111,12 @@ class Game:
             self.settings_index = 0
         elif opt == "NASIL OYNANIR?":
             self._open_help()
+        elif opt == "İSTATİSTİKLER":
+            self.state = "stats"
+        elif opt == "BAŞARIMLAR":
+            self.state = "achievements"
+        elif opt == "HİKAYE":
+            self.state = "lore"
         elif opt == "CIKIS":
             pygame.event.post(pygame.event.Event(pygame.QUIT))
 
@@ -1293,8 +2128,13 @@ class Game:
             step, row_h = 86, 76
             scroll = self.shop_scroll
         else:
-            key = ["hat","bag","glasses","cane"][self.inv_tab]
-            lst = [it for it in config.SHOP_ITEMS[key] if it["id"] in self.save["owned_items"]]
+            key = ["hat","bag","glasses","cane","weapon"][self.inv_tab]
+            if key == "weapon":
+                lst = [config.WEAPONS[wid] for wid in self.save.get("owned_weapons", ["fist"]) if wid in config.WEAPONS]
+                # convert to shop-like dict for rendering (needs id,name,price,icon)
+                lst = [{"id": w["id"], "name": w["name"], "price": w["price"], "icon": w.get("icon","W")} for w in lst]
+            else:
+                lst = [it for it in config.SHOP_ITEMS[key] if it["id"] in self.save["owned_items"]]
             step, row_h = 84, 74
             scroll = self.inv_scroll
         list_y = 108
@@ -1352,8 +2192,14 @@ class Game:
 
     # ---- shop ----
     def current_shop_list(self):
-        tabs = ["hat","bag","glasses","cane"]
+        tabs = ["hat","bag","glasses","cane","weapon"]
         key = tabs[self.shop_tab]
+        if key == "weapon":
+            # FAZ6: weapons are in config.WEAPONS, not SHOP_ITEMS
+            lst = []
+            for wid, w in config.WEAPONS.items():
+                lst.append({"id": w["id"], "name": w["name"], "price": w["price"], "icon": w.get("icon","W")})
+            return lst, key
         return config.SHOP_ITEMS[key], key
 
     def handle_shop_keys(self, event):
@@ -1361,10 +2207,10 @@ class Game:
             self.state = "menu"; save_system.save_game(self.save); return
         if event.key in (pygame.K_LEFT, pygame.K_a):
             self._reset_list("shop")
-            self.shop_tab = (self.shop_tab -1) % 4; audio.play("hover",0.6)
+            self.shop_tab = (self.shop_tab -1) % 5; audio.play("hover",0.6)
         elif event.key in (pygame.K_RIGHT, pygame.K_d):
             self._reset_list("shop")
-            self.shop_tab = (self.shop_tab +1) %4; audio.play("hover",0.6)
+            self.shop_tab = (self.shop_tab +1) %5; audio.play("hover",0.6)
         elif event.key in (pygame.K_UP, pygame.K_w):
             self.shop_index = max(0, self.shop_index-1)
             self._ensure_selection_visible("shop")
@@ -1376,27 +2222,79 @@ class Game:
             lst,key = self.current_shop_list()
             if 0 <= self.shop_index < len(lst):
                 item = lst[self.shop_index]
-                owned = item["id"] in self.save["owned_items"]
-                if owned:
-                    sel_key = {"hat":"selected_hat","bag":"selected_bag","glasses":"selected_glasses","cane":"selected_cane"}[key]
-                    if self.save.get(sel_key) == item["id"]:
-                        self.save[sel_key] = None
-                    else:
-                        self.save[sel_key] = item["id"]
-                    save_system.save_game(self.save)
-                    self._game_mutated()
-                else:
-                    if self.save["total_coins"] >= item["price"]:
-                        self.save["total_coins"] -= item["price"]
-                        if item["id"] not in self.save["owned_items"]:
-                            self.save["owned_items"].append(item["id"])
-                        sel_key = {"hat":"selected_hat","bag":"selected_bag","glasses":"selected_glasses","cane":"selected_cane"}[key]
-                        self.save[sel_key] = item["id"]
+                if key == "weapon":
+                    owned = item["id"] in self.save.get("owned_weapons", ["fist"])
+                    if owned:
+                        if self.save.get("equipped_weapon") == item["id"]:
+                            # fist cannot be unequipped fully, fallback to fist
+                            if item["id"] != "fist":
+                                self.save["equipped_weapon"] = "fist"
+                                try: self.player.attack_weapon = "fist"
+                                except: pass
+                                self._add_notification(f"CIKARILDI: {item['name']} -> YUMRUK", (180,180,180))
+                            else:
+                                self._add_notification("YUMRUK zaten kusanili", (180,180,180))
+                        else:
+                            self.save["equipped_weapon"] = item["id"]
+                            try: self.player.attack_weapon = item["id"]
+                            except: pass
+                            self._add_notification(f"KUSANILDI: {item['name']}!", (80,220,255))
+                            self._play_sfx_cd("weapon_equip", cd=0.12, volume=0.8)
                         save_system.save_game(self.save)
                         self._game_mutated()
-                        audio.play("coin")
                     else:
-                        audio.play("death",0.4)
+                        if self.save["total_coins"] >= item["price"]:
+                            self.save["total_coins"] -= item["price"]
+                            if "owned_weapons" not in self.save: self.save["owned_weapons"]=[]
+                            if item["id"] not in self.save["owned_weapons"]:
+                                self.save["owned_weapons"].append(item["id"])
+                            self.save["equipped_weapon"] = item["id"]
+                            try: self.player.attack_weapon = item["id"]
+                            except: pass
+                            save_system.save_game(self.save)
+                            self._game_mutated()
+                            try:
+                                self._shop_flash[item["id"]] = 0.6
+                                self._add_notification(f"SATIN ALINDI: {item['name']}!", (80,220,120))
+                                self._play_sfx_cd("purchase", cd=0.2, volume=0.9)
+                                self.particles.emit_coin(450, 200, 3)
+                            except: pass
+                            audio.play("weapon_equip")
+                        else:
+                            self._play_sfx_cd("death", cd=0.2, volume=0.4)
+                            audio.play("death",0.4)
+                else:
+                    owned = item["id"] in self.save["owned_items"]
+                    if owned:
+                        sel_key = {"hat":"selected_hat","bag":"selected_bag","glasses":"selected_glasses","cane":"selected_cane"}[key]
+                        if self.save.get(sel_key) == item["id"]:
+                            self.save[sel_key] = None
+                            self._add_notification(f"CIKARILDI: {item['name']}", (180,180,180))
+                        else:
+                            self.save[sel_key] = item["id"]
+                            self._add_notification(f"KUSANILDI: {item['name']}!", (80,200,255))
+                            self._play_sfx_cd("click", cd=0.12, volume=0.8)
+                        save_system.save_game(self.save)
+                        self._game_mutated()
+                    else:
+                        if self.save["total_coins"] >= item["price"]:
+                            self.save["total_coins"] -= item["price"]
+                            if item["id"] not in self.save["owned_items"]:
+                                self.save["owned_items"].append(item["id"])
+                            sel_key = {"hat":"selected_hat","bag":"selected_bag","glasses":"selected_glasses","cane":"selected_cane"}[key]
+                            self.save[sel_key] = item["id"]
+                            save_system.save_game(self.save)
+                            self._game_mutated()
+                            # FAZ5: purchase polish
+                            try:
+                                self._shop_flash[item["id"]] = 0.6
+                                self._add_notification(f"SATIN ALINDI: {item['name']}!", (80,220,120))
+                                self._play_sfx_cd("purchase", cd=0.2, volume=0.9)
+                                self.particles.emit_coin(450, 200, 3)
+                            except: pass
+                            audio.play("purchase")
+                        else:
+                            audio.play("death",0.4)
 
     def handle_char_keys(self, event):
         if event.key == pygame.K_ESCAPE:
@@ -1416,6 +2314,10 @@ class Game:
                 self.save["selected_character"] = ch["id"]
                 save_system.save_game(self.save)
                 self._game_mutated()
+                try:
+                    self._add_notification(f"KARAKTER: {ch['name']}!", (120,220,255))
+                    self._play_sfx_cd("click", cd=0.12, volume=0.8)
+                except: pass
                 audio.play("click")
 
     def handle_inv_keys(self, event):
@@ -1423,30 +2325,53 @@ class Game:
             self.state="menu"; return
         if event.key in (pygame.K_LEFT, pygame.K_a):
             self._reset_list("inventory")
-            self.inv_tab = (self.inv_tab -1) %4; audio.play("hover",0.6)
+            self.inv_tab = (self.inv_tab -1) %5; audio.play("hover",0.6)
         elif event.key in (pygame.K_RIGHT, pygame.K_d):
             self._reset_list("inventory")
-            self.inv_tab = (self.inv_tab+1)%4; audio.play("hover",0.6)
+            self.inv_tab = (self.inv_tab+1)%5; audio.play("hover",0.6)
         elif event.key in (pygame.K_UP, pygame.K_w):
             self.inv_index = max(0, self.inv_index-1)
             self._ensure_selection_visible("inventory")
         elif event.key in (pygame.K_DOWN, pygame.K_s):
-            tabs=["hat","bag","glasses","cane"]
+            tabs=["hat","bag","glasses","cane","weapon"]
             key=tabs[self.inv_tab]
-            owned = [it for it in config.SHOP_ITEMS[key] if it["id"] in self.save["owned_items"]]
+            if key == "weapon":
+                owned = [config.WEAPONS[wid] for wid in self.save.get("owned_weapons", ["fist"]) if wid in config.WEAPONS]
+                owned = [{"id": w["id"], "name": w["name"], "price": w["price"], "icon": w.get("icon","W")} for w in owned]
+            else:
+                owned = [it for it in config.SHOP_ITEMS[key] if it["id"] in self.save["owned_items"]]
             self.inv_index = min(max(0,len(owned)-1), self.inv_index+1)
             self._ensure_selection_visible("inventory")
         elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-            tabs=["hat","bag","glasses","cane"]
+            tabs=["hat","bag","glasses","cane","weapon"]
             key=tabs[self.inv_tab]
-            owned = [it for it in config.SHOP_ITEMS[key] if it["id"] in self.save["owned_items"]]
+            if key == "weapon":
+                owned_raw = [config.WEAPONS[wid] for wid in self.save.get("owned_weapons", ["fist"]) if wid in config.WEAPONS]
+                owned = [{"id": w["id"], "name": w["name"], "price": w["price"], "icon": w.get("icon","W")} for w in owned_raw]
+            else:
+                owned = [it for it in config.SHOP_ITEMS[key] if it["id"] in self.save["owned_items"]]
             if owned and 0 <= self.inv_index < len(owned):
                 item = owned[self.inv_index]
-                sel_key = {"hat":"selected_hat","bag":"selected_bag","glasses":"selected_glasses","cane":"selected_cane"}[key]
-                if self.save.get(sel_key)==item["id"]:
-                    self.save[sel_key]=None
+                if key == "weapon":
+                    if self.save.get("equipped_weapon")==item["id"]:
+                        if item["id"] != "fist":
+                            self.save["equipped_weapon"]="fist"
+                            self._add_notification(f"CIKARILDI: {item['name']} -> YUMRUK", (180,180,180))
+                        else:
+                            self._add_notification("YUMRUK zaten kusanili", (180,180,180))
+                    else:
+                        self.save["equipped_weapon"]=item["id"]
+                        self._add_notification(f"KUSANILDI: {item['name']}!", (80,220,255))
+                        self._play_sfx_cd("weapon_equip", cd=0.12, volume=0.8)
                 else:
-                    self.save[sel_key]=item["id"]
+                    sel_key = {"hat":"selected_hat","bag":"selected_bag","glasses":"selected_glasses","cane":"selected_cane"}[key]
+                    if self.save.get(sel_key)==item["id"]:
+                        self.save[sel_key]=None
+                        self._add_notification(f"CIKARILDI: {item['name']}", (180,180,180))
+                    else:
+                        self.save[sel_key]=item["id"]
+                        self._add_notification(f"KUSANILDI: {item['name']}!", (80,200,255))
+                        self._play_sfx_cd("click", cd=0.12, volume=0.8)
                 save_system.save_game(self.save)
                 self._game_mutated()
                 audio.play("click")
@@ -1466,7 +2391,14 @@ class Game:
             self.save["theme"] = config.THEMES[self.theme_index]["id"]
             save_system.save_game(self.save)
             self._game_mutated()
-            audio.play("click")
+            self._trigger_transition(0.25)
+            self._sfx("theme_select")
+            # FAZ5: theme equip feedback
+            try:
+                tn = config.THEMES[self.theme_index]["name"]
+                self._add_notification(f"TEMA: {tn}!", (180,220,255))
+                self._play_sfx_cd("unlock", cd=0.2, volume=0.7)
+            except: pass
 
     def handle_settings_keys(self, event):
         if event.key == pygame.K_ESCAPE:
@@ -1477,6 +2409,7 @@ class Game:
             else:
                 self.state = self.prev_state if self.prev_state in ("menu",) else "menu"
             save_system.save_game(self.save)
+            audio.play("click")
             return
         if event.key == pygame.K_UP:
             self.settings_index = (self.settings_index -1) % len(self.settings_items)
@@ -1494,24 +2427,80 @@ class Game:
                 self.save["settings"]["show_tutorial"] = not cur
                 save_system.save_game(self.save)
                 audio.play("click")
-            elif self.settings_index == 4:
+            elif self.settings_index == 4:  # fullscreen toggle (ENTER)
+                cur = bool(self.save["settings"].get("fullscreen", False))
+                self.save["settings"]["fullscreen"] = not cur
+                save_system.save_game(self.save)
+                self._try_apply_display(fullscreen=not cur)
+                audio.play("click")
+            elif self.settings_index == 5:  # fps cycle (ENTER)
+                cur = int(self.save["settings"].get("fps_limit", 60))
+                opts = [30,60,90,120,0]
+                idx = opts.index(cur) if cur in opts else 1
+                nxt = opts[(idx+1)%len(opts)]
+                self.save["settings"]["fps_limit"] = nxt
+                save_system.save_game(self.save)
+                audio.play("click")
+            elif self.settings_index == 6:  # resolution cycle (ENTER)
+                cur = str(self.save["settings"].get("resolution","900x700"))
+                opts = ["900x700","1280x720","1600x900","1920x1080"]
+                idx = opts.index(cur) if cur in opts else 0
+                nxt = opts[(idx+1)%len(opts)]
+                self.save["settings"]["resolution"] = nxt
+                save_system.save_game(self.save)
+                if not self.save["settings"].get("fullscreen", False):
+                    self._try_apply_display(resolution=nxt)
+                audio.play("click")
+            elif self.settings_index == 7:  # controls info - show help
+                self._open_help()
+            elif self.settings_index == 8:  # geri
                 if self.prev_state == "paused":
                     self.state = "playing"; self.paused = True
                 else:
                     self.state = self.prev_state if self.prev_state in ("menu",) else "menu"
                 save_system.save_game(self.save)
+                audio.play("click")
 
     def adjust_setting(self, delta):
         s = self.save["settings"]
         if self.settings_index == 0:
-            s["master"] = round(max(0, min(1, s["master"]+delta)), 2)
+            s["master"] = round(max(0, min(1, s.get("master",0.7)+delta)), 2)
             audio.set_master(s["master"])
         elif self.settings_index == 1:
-            s["music"] = round(max(0, min(1, s["music"]+delta)), 2)
+            s["music"] = round(max(0, min(1, s.get("music",0.5)+delta)), 2)
             audio.set_music(s["music"])
         elif self.settings_index == 2:
-            s["sfx"] = round(max(0, min(1, s["sfx"]+delta)), 2)
+            s["sfx"] = round(max(0, min(1, s.get("sfx",0.8)+delta)), 2)
             audio.set_sfx(s["sfx"])
+        elif self.settings_index == 3:  # tutorial toggle via left/right
+            if delta != 0:
+                cur = bool(s.get("show_tutorial", True))
+                s["show_tutorial"] = not cur
+        elif self.settings_index == 4:  # fullscreen via left/right
+            if delta != 0:
+                cur = bool(s.get("fullscreen", False))
+                s["fullscreen"] = not cur
+                self._try_apply_display(fullscreen=not cur)
+        elif self.settings_index == 5:  # fps cycle via left/right
+            cur = int(s.get("fps_limit", 60))
+            opts = [30,60,90,120,0]
+            idx = opts.index(cur) if cur in opts else 1
+            step = 1 if delta>0 else -1
+            nxt = opts[(idx+step)%len(opts)]
+            s["fps_limit"] = nxt
+        elif self.settings_index == 6:  # resolution cycle via left/right
+            cur = str(s.get("resolution","900x700"))
+            opts = ["900x700","1280x720","1600x900","1920x1080"]
+            idx = opts.index(cur) if cur in opts else 0
+            step = 1 if delta>0 else -1
+            nxt = opts[(idx+step)%len(opts)]
+            s["resolution"] = nxt
+            if not s.get("fullscreen", False):
+                self._try_apply_display(resolution=nxt)
+        elif self.settings_index == 7:
+            # controls info - no ajuste, just feedback
+            audio.play("hover",0.3)
+            return
         save_system.save_game(self.save)
 
     def handle_levels_keys(self, event):
@@ -1542,6 +2531,12 @@ class Game:
                 audio.play("death", 0.4)
 
     def handle_level_complete_keys(self, event):
+        # FAZ10: block early input until buttons appear (0.88s)
+        if getattr(self, 'level_complete_timer', 0) < 0.88:
+            if event.key == pygame.K_ESCAPE:
+                self.state = "levels"
+                return
+            return
         if event.key == pygame.K_ESCAPE:
             self.state = "levels"
             return
@@ -1565,6 +2560,15 @@ class Game:
             self.state = "menu"
             self.ending_anim = 0
             self.ending_timer = 0
+
+    def handle_final_cinematic_keys(self, event):
+        if event.key in (pygame.K_ESCAPE, pygame.K_SPACE, pygame.K_RETURN):
+            self.state = "level_complete"
+            self.level_complete_timer = 0.90
+            self.save["final_cinematic_seen"] = True
+            try: save_system.save_game(self.save)
+            except: pass
+            audio.play("click")
             audio.play("click")
 
     # ---- profil / vs / online ----
@@ -1757,6 +2761,8 @@ class Game:
         self.vs_remote = None
         # VS yarış — aynı dünya, bot arkada
         self.player.reset(config.SCREEN_WIDTH//2 - config.PLAYER_W//2, 80)
+        try: self.player.attack_weapon = self.save.get("equipped_weapon","fist")
+        except: pass
         self.camera.reset(self.player.y)
         self.world.reset()
         self.particles = ParticleSystem()
@@ -1778,6 +2784,10 @@ class Game:
         # monster da VS'de aktif — her ikisini de kovalasın
         self.monster = Monster()
         self.monster.reset(self.player.y, 1, "HAVA")
+        try: self._update_level_music("HAVA", force=True)
+        except: pass
+        try: self._update_level_music("HAVA", force=True)
+        except: pass
 
     def start_vs_online(self):
         if not self.online_info:
@@ -1801,6 +2811,8 @@ class Game:
             except:
                 pass
         self.player.reset(config.SCREEN_WIDTH//2 - config.PLAYER_W//2, 80)
+        try: self.player.attack_weapon = self.save.get("equipped_weapon","fist")
+        except: pass
         self.camera.reset(self.player.y)
         self.world.reset()
         self.particles=ParticleSystem()
@@ -1901,6 +2913,8 @@ class Game:
             self.vs_opponent_id = self.online_info.get("id") if self.online_info else "Rakip"
             self.vs_opponent_nick = self.online_info.get("nick") if self.online_info else "Rakip"
         self.player.reset(config.SCREEN_WIDTH//2 - config.PLAYER_W//2, 80)
+        try: self.player.attack_weapon = self.save.get("equipped_weapon","fist")
+        except: pass
         self.camera.reset(self.player.y)
         self.world.reset()
         self.particles = ParticleSystem()
@@ -1908,6 +2922,10 @@ class Game:
         self.level_info = config.LEVELS[0]
         self.monster = Monster()
         self.monster.reset(self.player.y, 1, "HAVA")
+        try: self._update_level_music("HAVA", force=True)
+        except: pass
+        try: self._update_level_music("HAVA", force=True)
+        except: pass
         self.vs_remote = None
         audio.play("levelup")
 
@@ -1922,6 +2940,14 @@ class Game:
             self.vs_bot=None
             self.vs_finish_y=None
             audio.play("click")
+        elif event.key in (pygame.K_f, pygame.K_j):
+            # FAZ6: vs attack
+            try:
+                wid = self.save.get("equipped_weapon","fist")
+                if self.player.try_attack(wid):
+                    w = config.get_weapon(wid)
+                    self._play_sfx_cd("sword_swing" if wid=="beam_sword" else "punch", cd=0.08, volume=0.7)
+            except: pass
         elif event.key==pygame.K_SPACE:
             self.paused= not self.paused
         elif event.key in (pygame.K_UP, pygame.K_w):
@@ -1951,12 +2977,18 @@ class Game:
                 self._close_help()
             return
         if self.state=="menu":
-            # draw_menu ile aynı geometri: btn 320x42 start_y 182 gap 48
-            btn_w, btn_h = 320, 42; start_y = 182; gap = 48
+            # draw_menu ile aynı geometri (FAZ10 adaptive 11 için)
+            _n = len(self.menu_options)
+            if _n > 10:
+                btn_w, btn_h = 320, 38; start_y = 180; gap = 42
+            else:
+                btn_w, btn_h = 326, 44; start_y = 194; gap = 50
             for i in range(len(self.menu_options)):
                 bx = config.SCREEN_WIDTH//2 - btn_w//2; by = start_y + i*gap
                 if bx <= mx <= bx+btn_w and by <= my <= by+btn_h:
-                    self.menu_index = i; audio.play("hover",0.4); self.activate_menu(); break
+                    self.menu_index = i
+                    self._btn_press_idx = i; self._btn_press_t = 0.12
+                    self._sfx("menu_click"); self.activate_menu(); break
         elif self.state=="gameover":
             # draw_gameover: box W//2-250,H//2-170,500,360 -> b1 box.x+50,box.y+285 190x44
             box = pygame.Rect(config.SCREEN_WIDTH//2-250, config.SCREEN_HEIGHT//2-170, 500, 360)
@@ -1975,42 +3007,93 @@ class Game:
                     elif i==2: self.state="menu"; self.paused=False; save_system.save_game(self.save); audio.play("click")
                     break
         elif self.state=="settings":
-            # draw_settings ile birebir: card 80,80,740,360; bar y=120+idx*62 bar 260,y+18 380x14
-            card = pygame.Rect(80, 80, config.SCREEN_WIDTH-160, 360)
+            lay = self._settings_layout()
+            card = lay["card"]
+            bars = lay["bars"]
+            rows = lay["rows"]
+            back = lay["back"]
+            # sliders 0..2
             for idx in range(3):
-                y = 120 + idx*62
-                bar = pygame.Rect(260, y+18, 380, 14)
-                # bar ve knob çevresini büyüt (tıklaması kolay)
+                y, bar = bars[idx]
                 hit = bar.inflate(0, 10)
-                if hit.collidepoint(mx,my):
-                    rel = round(max(0,min(1,(mx - bar.x)/bar.width)), 2)
-                    key = ["master","music","sfx"][idx]
-                    self.save["settings"][key]=rel
-                    if key=="master": audio.set_master(rel)
-                    elif key=="music": audio.set_music(rel)
-                    elif key=="sfx": audio.set_sfx(rel)
-                    save_system.save_game(self.save)
-                    audio.play("hover",0.3)
-            # tutorial checkbox draw: cb Rect(card.x+card.width-46,316) 22x22
-            cb = pygame.Rect(card.x+card.width-46, 316, 22, 22)
-            # toggle için tüm satır hit
-            toggle_row = pygame.Rect(card.x+14, 306, card.width-28, 36)
-            if toggle_row.collidepoint(mx,my) or cb.collidepoint(mx,my):
+                # also expand to row hit
+                row_hit = pygame.Rect(card.x+14, y-4, card.width-28, 36)
+                if hit.collidepoint(mx,my) or row_hit.collidepoint(mx,my):
+                    # only if bar area: if clicking row but not bar, treat as selection?
+                    # but for precise, if click inside bar -> set value
+                    if hit.collidepoint(mx,my):
+                        rel = round(max(0,min(1,(mx - bar.x)/bar.width)), 2)
+                        key = ["master","music","sfx"][idx]
+                        self.save["settings"][key]=rel
+                        if key=="master": audio.set_master(rel)
+                        elif key=="music": audio.set_music(rel)
+                        elif key=="sfx": audio.set_sfx(rel)
+                        save_system.save_game(self.save)
+                        self.settings_index = idx
+                        audio.play("hover",0.3)
+                        return
+                    else:
+                        # row click -> select
+                        self.settings_index = idx
+                        audio.play("hover",0.3)
+                        return
+            # rows 3..7
+            if rows[3].collidepoint(mx,my):
+                self.settings_index = 3
                 cur = self.save["settings"].get("show_tutorial", True)
                 self.save["settings"]["show_tutorial"]=not cur
                 save_system.save_game(self.save)
                 audio.play("click")
-            # geri butonu draw: card.centerx-90, card.bottom-44 180x34
-            back = pygame.Rect(card.centerx-90, card.bottom-44, 180, 34)
+                return
+            if rows[4].collidepoint(mx,my):
+                self.settings_index = 4
+                cur = bool(self.save["settings"].get("fullscreen", False))
+                self.save["settings"]["fullscreen"] = not cur
+                save_system.save_game(self.save)
+                self._try_apply_display(fullscreen=not cur)
+                audio.play("click")
+                return
+            if rows[5].collidepoint(mx,my):
+                self.settings_index = 5
+                # cycle fps on click
+                cur = int(self.save["settings"].get("fps_limit", 60))
+                opts = [30,60,90,120,0]
+                idx = opts.index(cur) if cur in opts else 1
+                nxt = opts[(idx+1)%len(opts)]
+                self.save["settings"]["fps_limit"] = nxt
+                save_system.save_game(self.save)
+                audio.play("click")
+                return
+            if rows[6].collidepoint(mx,my):
+                self.settings_index = 6
+                cur = str(self.save["settings"].get("resolution","900x700"))
+                opts = ["900x700","1280x720","1600x900","1920x1080"]
+                idx = opts.index(cur) if cur in opts else 0
+                nxt = opts[(idx+1)%len(opts)]
+                self.save["settings"]["resolution"] = nxt
+                save_system.save_game(self.save)
+                if not self.save["settings"].get("fullscreen", False):
+                    self._try_apply_display(resolution=nxt)
+                audio.play("click")
+                return
+            if rows[7].collidepoint(mx,my):
+                self.settings_index = 7
+                self._open_help()
+                return
             if back.collidepoint(mx,my):
+                self.settings_index = 8
                 if self.prev_state == "paused":
                     self.state = "playing"; self.paused = True
                 else:
                     self.state = self.prev_state if self.prev_state in ("menu",) else "menu"
+                save_system.save_game(self.save)
                 audio.play("click")
+                return
+            # also bar hover selection without click? handled via motion
+            # click on empty card selects nearest? no
         elif self.state=="shop":
             # tab hit
-            tabs = ["SAPKA","CANTA","GOZLUK","BASTON"]
+            tabs = ["SAPKA","CANTA","GOZLUK","BASTON","SİLAH"]
             tab_w=110; gap=12; total_w=len(tabs)*tab_w+(len(tabs)-1)*gap; start_x=config.SCREEN_WIDTH//2-total_w//2
             for i in range(len(tabs)):
                 r=pygame.Rect(start_x+i*(tab_w+gap),68,tab_w,30)
@@ -2027,16 +3110,59 @@ class Game:
                     # çift tık gibi: satın al/kuşan
                     key=self.current_shop_list()[1]
                     item=lst[idx]
-                    owned=item["id"] in self.save["owned_items"]
-                    sel_key={"hat":"selected_hat","bag":"selected_bag","glasses":"selected_glasses","cane":"selected_cane"}[key]
-                    if owned:
-                        if self.save.get(sel_key)==item["id"]: self.save[sel_key]=None
-                        else: self.save[sel_key]=item["id"]
-                        save_system.save_game(self.save); self._game_mutated(); audio.play("click")
+                    # FAZ6: weapon handling for mouse shop
+                    if key == "weapon":
+                        owned_w = item["id"] in self.save.get("owned_weapons", ["fist"])
+                        if owned_w:
+                            if self.save.get("equipped_weapon")==item["id"]:
+                                if item["id"] != "fist":
+                                    self.save["equipped_weapon"]="fist"
+                                    self._add_notification(f"CIKARILDI: {item['name']} -> YUMRUK", (180,180,180))
+                                else:
+                                    self._add_notification("YUMRUK zaten kusanili", (180,180,180))
+                            else:
+                                self.save["equipped_weapon"]=item["id"]
+                                self._add_notification(f"KUSANILDI: {item['name']}!", (80,220,255))
+                                self._play_sfx_cd("weapon_equip", cd=0.12, volume=0.8)
+                            save_system.save_game(self.save); self._game_mutated(); audio.play("click")
+                        else:
+                            if self.save["total_coins"]>=item["price"]:
+                                self.save["total_coins"]-=item["price"]
+                                if "owned_weapons" not in self.save: self.save["owned_weapons"]=[]
+                                if item["id"] not in self.save["owned_weapons"]:
+                                    self.save["owned_weapons"].append(item["id"])
+                                self.save["equipped_weapon"]=item["id"]
+                                try: self.player.attack_weapon=item["id"]
+                                except: pass
+                                save_system.save_game(self.save); self._game_mutated()
+                                try:
+                                    self._shop_flash[item["id"]] = 0.6
+                                    self._add_notification(f"SATIN ALINDI: {item['name']}!", (80,220,120))
+                                    self._play_sfx_cd("purchase", cd=0.2, volume=0.9)
+                                except: pass
+                                audio.play("weapon_equip")
+                            else:
+                                audio.play("death",0.4)
                     else:
-                        if self.save["total_coins"]>=item["price"]:
-                            self.save["total_coins"]-=item["price"]; self.save["owned_items"].append(item["id"])
-                            self.save[sel_key]=item["id"]; save_system.save_game(self.save); self._game_mutated(); audio.play("coin")
+                        owned=item["id"] in self.save["owned_items"]
+                        if owned:
+                            sel_key={"hat":"selected_hat","bag":"selected_bag","glasses":"selected_glasses","cane":"selected_cane"}[key]
+                            if self.save.get(sel_key)==item["id"]: self.save[sel_key]=None
+                            else: self.save[sel_key]=item["id"]
+                            save_system.save_game(self.save); self._game_mutated(); audio.play("click")
+                        else:
+                            sel_key={"hat":"selected_hat","bag":"selected_bag","glasses":"selected_glasses","cane":"selected_cane"}[key]
+                            if self.save["total_coins"]>=item["price"]:
+                                self.save["total_coins"]-=item["price"]; self.save["owned_items"].append(item["id"])
+                                self.save[sel_key]=item["id"]; save_system.save_game(self.save); self._game_mutated()
+                                try:
+                                    self._shop_flash[item["id"]] = 0.6
+                                    self._add_notification(f"SATIN ALINDI: {item['name']}!", (80,220,120))
+                                    self._play_sfx_cd("purchase", cd=0.2, volume=0.9)
+                                except: pass
+                                audio.play("purchase")
+                            else:
+                                audio.play("death",0.4)
                     break
         elif self.state=="characters":
             n=len(config.CHARACTERS); cols=6 if n>12 else 3
@@ -2056,34 +3182,50 @@ class Game:
                     else: audio.play("death",0.4)
                     break
         elif self.state=="inventory":
-            tabs=["SAPKA","CANTA","GOZLUK","BASTON"]
+            tabs=["SAPKA","CANTA","GOZLUK","BASTON","SİLAH"]
             tab_w=110; gap=12; total_w=len(tabs)*tab_w+(len(tabs)-1)*gap; start_x=config.SCREEN_WIDTH//2-total_w//2
             for i in range(len(tabs)):
                 r=pygame.Rect(start_x+i*(tab_w+gap),68,tab_w,28)
                 if r.collidepoint(mx,my):
                     self._reset_list("inventory"); self.inv_tab=i; audio.play("click"); return
             lay = self._list_layout("inventory")
-            key=["hat","bag","glasses","cane"][self.inv_tab]
+            key=["hat","bag","glasses","cane","weapon"][self.inv_tab]
             owned=lay["lst"]
             for idx,item in enumerate(owned):
                 y = lay["list_y"] + idx*lay["step"] - lay["scroll"]
                 r=pygame.Rect(60,y,config.SCREEN_WIDTH-120,lay["row_h"])
                 if r.collidepoint(mx,my):
                     self.inv_index=idx
-                    sel_key={"hat":"selected_hat","bag":"selected_bag","glasses":"selected_glasses","cane":"selected_cane"}[key]
-                    if self.save.get(sel_key)==item["id"]: self.save[sel_key]=None
-                    else: self.save[sel_key]=item["id"]
+                    if key == "weapon":
+                        if self.save.get("equipped_weapon")==item["id"]:
+                            if item["id"] != "fist":
+                                self.save["equipped_weapon"]="fist"
+                                self._add_notification(f"CIKARILDI: {item['name']} -> YUMRUK", (180,180,180))
+                            else:
+                                self._add_notification("YUMRUK zaten kusanili", (180,180,180))
+                        else:
+                            self.save["equipped_weapon"]=item["id"]
+                            self._add_notification(f"KUSANILDI: {item['name']}!", (80,220,255))
+                            self._play_sfx_cd("weapon_equip", cd=0.12, volume=0.8)
+                    else:
+                        sel_key={"hat":"selected_hat","bag":"selected_bag","glasses":"selected_glasses","cane":"selected_cane"}[key]
+                        if self.save.get(sel_key)==item["id"]: self.save[sel_key]=None
+                        else: self.save[sel_key]=item["id"]
                     save_system.save_game(self.save); self._game_mutated(); audio.play("click")
                     break
         elif self.state=="themes":
-            cols=4; card_w,card_h=190,108; gap_x,gap_y=18,16
+            cols=4; card_w,card_h=190,110; gap_x,gap_y=18,16
             start_x=config.SCREEN_WIDTH//2 - (cols*card_w+(cols-1)*gap_x)//2; start_y=88
+            cur_row = (self.theme_index // cols)
+            total_rows = (len(config.THEMES) + cols - 1)//cols
+            first_row = max(0, min(cur_row - 1, max(0, total_rows - 4)))
+            y_off = first_row * (card_h + gap_y)
             for idx,t in enumerate(config.THEMES):
                 row=idx//cols; col=idx%cols
-                x=start_x+col*(card_w+gap_x); y=start_y+row*(card_h+gap_y)
+                x=start_x+col*(card_w+gap_x); y=start_y+row*(card_h+gap_y) - y_off
                 r=pygame.Rect(x,y,card_w,card_h)
                 if r.collidepoint(mx,my):
-                    self.theme_index=idx; self.save["theme"]=t["id"]; save_system.save_game(self.save); self._game_mutated(); audio.play("click"); break
+                    self.theme_index=idx; self.save["theme"]=t["id"]; save_system.save_game(self.save); self._game_mutated(); self._trigger_transition(0.25); self._sfx("theme_select"); break
         elif self.state=="levels":
             cols=4; card_w,card_h=190,92; gap_x,gap_y=14,12
             start_x=config.SCREEN_WIDTH//2 - (cols*card_w+(cols-1)*gap_x)//2; start_y=88
@@ -2100,7 +3242,14 @@ class Game:
                     else:
                         audio.play("death",0.4)
                     break
+        elif self.state in ("stats", "achievements", "lore"):
+            back = pygame.Rect(config.SCREEN_WIDTH//2-90, config.SCREEN_HEIGHT-60, 180, 36)
+            if back.collidepoint(mx,my):
+                self.state="menu"
+                audio.play("click")
         elif self.state=="level_complete":
+            if getattr(self, 'level_complete_timer',0) < 0.88:
+                return
             # ortadaki butonlar: DEVAM (sonraki) ve MENÜ
             box = pygame.Rect(config.SCREEN_WIDTH//2-220, config.SCREEN_HEIGHT//2-110, 440, 220)
             b1 = pygame.Rect(box.x+20, box.bottom-52, 190, 38)
@@ -2120,6 +3269,13 @@ class Game:
                 audio.play("click")
         elif self.state=="ending":
             self.state="menu"
+            audio.play("click")
+        elif self.state=="final_cinematic":
+            self.state="level_complete"
+            self.level_complete_timer=0.90
+            self.save["final_cinematic_seen"]=True
+            try: save_system.save_game(self.save)
+            except: pass
             audio.play("click")
         elif self.state=="account_gate":
             # draw_account_gate ile aynı geometri: 400x66, start_y 168, gap 80
@@ -2237,7 +3393,11 @@ class Game:
                 self.hover_index = -1
             return
         if self.state=="menu":
-            btn_w, btn_h = 320,42; start_y=182; gap=48
+            _n = len(self.menu_options)
+            if _n > 10:
+                btn_w, btn_h = 320, 38; start_y = 180; gap = 42
+            else:
+                btn_w, btn_h = 320,42; start_y=182; gap=48
             for i in range(len(self.menu_options)):
                 bx=config.SCREEN_WIDTH//2 - btn_w//2; by=start_y+i*gap
                 if bx <= mx <= bx+btn_w and by <= my <= by+btn_h:
@@ -2262,7 +3422,7 @@ class Game:
         theme = next((t for t in config.THEMES if t["id"]==self.save.get("theme","beyaz")), config.THEMES[0])
         try:
             if self.state in ("playing","paused","gameover","level_complete","ending"):
-                self.world.draw(surf, self.camera.y, self.level_info)
+                self.world.draw(surf, self.camera.y, self.level_info, theme)
                 # bölüm bitiş portalı — canavar modunda
                 if self.level_mode is not None and self.level_target_px is not None:
                     finish_sy = int(self.level_target_px - self.camera.y)
@@ -2286,24 +3446,64 @@ class Game:
                 self.particles.draw(surf, self.camera.y)
                 self.player.draw(surf, self.camera.y, self.get_char_data(), self.get_equipped(), theme)
                 self.draw_hud(surf, theme)
+                # FAZ11: level intro (first time)
+                try:
+                    if getattr(self, 'level_intro_active', False):
+                        _a_in = 1.0
+                        if self.level_intro_timer < 0.3:
+                            _a_in = self.level_intro_timer/0.3
+                        elif self.level_intro_timer > 1.2:
+                            _a_in = (1.6 - self.level_intro_timer)/0.4
+                        _a_in = max(0, min(1, _a_in))
+                        _lore11 = config.LEVEL_LORE.get(self.level_mode, {"title": self.level_info["name"], "text": ""})
+                        _bar = pygame.Rect(config.SCREEN_WIDTH//2-220, config.SCREEN_HEIGHT//2-40, 440, 80)
+                        _s = pygame.Surface((_bar.width, _bar.height), pygame.SRCALPHA)
+                        _s.fill((0,0,0, int(170*_a_in)))
+                        surf.blit(_s, _bar.topleft)
+                        pygame.draw.rect(surf, (255,215,0, int(200*_a_in)), _bar, width=2, border_radius=10)
+                        _t1 = self.font_big.render(_lore11["title"], True, (255,215,0))
+                        _t1.set_alpha(int(255*_a_in))
+                        surf.blit(_t1, (_bar.centerx - _t1.get_width()//2, _bar.y+14))
+                        _t2 = self.font_small.render(_lore11["text"], True, (255,255,255))
+                        _t2.set_alpha(int(255*_a_in))
+                        # wrap if too long
+                        if _t2.get_width() > _bar.width-20:
+                            # simple split
+                            _words = _lore11["text"].split(" ")
+                            _l1=""; _l2=""
+                            for _w in _words:
+                                _test = (_l1+" "+_w).strip()
+                                if self.font_small.size(_test)[0] < _bar.width-20:
+                                    _l1=_test
+                                else:
+                                    _l2+=_w+" "
+                            _t2a=self.font_small.render(_l1.strip(), True, (255,255,255)); _t2a.set_alpha(int(255*_a_in))
+                            surf.blit(_t2a, (_bar.centerx - _t2a.get_width()//2, _bar.y+44))
+                            if _l2.strip():
+                                _t2b=self.font_tiny.render(_l2.strip(), True, (200,200,210)); _t2b.set_alpha(int(200*_a_in))
+                                surf.blit(_t2b, (_bar.centerx - _t2b.get_width()//2, _bar.y+62))
+                        else:
+                            surf.blit(_t2, (_bar.centerx - _t2.get_width()//2, _bar.y+44))
+                except: pass
+                # FAZ9: death/finish flash (subtle)
+                try:
+                    if getattr(self, 'death_flash',0)>0:
+                        _a = int(90*min(1, self.death_flash))
+                        _over = pygame.Surface((config.SCREEN_WIDTH, config.SCREEN_HEIGHT), pygame.SRCALPHA)
+                        _over.fill((20,0,0, _a//2))
+                        surf.blit(_over, (0,0))
+                    elif getattr(self, 'finish_flash',0)>0:
+                        _a2 = int(70*min(1, self.finish_flash))
+                        _over2 = pygame.Surface((config.SCREEN_WIDTH, config.SCREEN_HEIGHT), pygame.SRCALPHA)
+                        _over2.fill((255,215,0, _a2//4))
+                        surf.blit(_over2, (0,0))
+                except: pass
                 # tutorial overlay
                 if self.state=="playing" and not self.paused and self.save.get("settings",{}).get("show_tutorial",True) and not self.save.get("tutorial_done",False):
                     self.draw_tutorial(surf)
                 if self.level_up_anim > 0:
                     self.draw_levelup(surf)
-                # İzmir Marşı göstergesi
-                if self.izmir_marsi_playing:
-                    bar = pygame.Rect(config.SCREEN_WIDTH//2-140, 62, 280, 22)
-                    s = pygame.Surface((bar.width, bar.height), pygame.SRCALPHA)
-                    s.fill((200,20,30, 210))
-                    surf.blit(s, bar.topleft)
-                    pygame.draw.rect(surf, (255,215,0), bar, width=2, border_radius=8)
-                    pygame.draw.rect(surf, (255,255,255), bar, width=1, border_radius=8)
-                    txt = self.font_small.render("♫ İzmir Marşı ♫  (M ile kapat)", True, (255,255,255))
-                    surf.blit(txt, (bar.centerx - txt.get_width()//2, bar.centery - txt.get_height()//2))
-                    # küçük nota animasyonu
-                    note_x = bar.x + 14 + int((pygame.time.get_ticks()/180) % (bar.width-28))
-                    pygame.draw.circle(surf, (255,215,0), (note_x, bar.y-8), 4)
+                # (FAZ14) legacy marş gostergesi kaldirildi
                 if self.state=="paused" or self.paused:
                     self.draw_pause(surf, theme)
                 if self.state=="gameover":
@@ -2322,9 +3522,15 @@ class Game:
                 self.draw_settings(surf, theme)
             elif self.state=="levels":
                 self.draw_levels(surf, theme)
+            elif self.state=="stats":
+                self.draw_stats(surf, theme)
+            elif self.state=="achievements":
+                self.draw_achievements(surf, theme)
+            elif self.state=="lore":
+                self.draw_lore(surf, theme)
             elif self.state=="level_complete":
                 # arka planı da çiz (donmuş oyun)
-                self.world.draw(surf, self.camera.y, self.level_info)
+                self.world.draw(surf, self.camera.y, self.level_info, theme)
                 self.particles.draw(surf, self.camera.y)
                 if hasattr(self, 'monster'):
                     try: self.monster.draw(surf, self.camera.y)
@@ -2333,13 +3539,15 @@ class Game:
                 self.draw_hud(surf, theme)
                 self.draw_level_complete(surf, theme)
             elif self.state=="ending":
-                self.world.draw(surf, self.camera.y, self.level_info)
+                self.world.draw(surf, self.camera.y, self.level_info, theme)
                 self.particles.draw(surf, self.camera.y)
                 if hasattr(self, 'monster'):
                     try: self.monster.draw(surf, self.camera.y)
                     except: pass
                 self.player.draw(surf, self.camera.y, self.get_char_data(), self.get_equipped(), theme)
                 self.draw_ending(surf, theme)
+            elif self.state=="final_cinematic":
+                self.draw_final_cinematic(surf, theme)
             elif self.state=="profile_create":
                 self.draw_profile(surf, theme)
             elif self.state=="account_gate":
@@ -2354,7 +3562,7 @@ class Game:
                 self.draw_online(surf, theme)
             elif self.state in ("vs_bot","vs_online"):
                 # VS yarış — aynı dünya + rakip + bitiş çizgisi
-                self.world.draw(surf, self.camera.y, self.level_info)
+                self.world.draw(surf, self.camera.y, self.level_info, theme)
                 # bitiş çizgisi — vs_bot için görünür
                 if self.state == "vs_bot" and getattr(self, "vs_finish_y", None) is not None:
                     try:
@@ -2389,7 +3597,7 @@ class Game:
                     self.draw_pause(surf, theme)
             elif self.state == "vs_result":
                 # vs_result arka plan: donmuş yarış + sonuç overlay
-                self.world.draw(surf, self.camera.y, self.level_info)
+                self.world.draw(surf, self.camera.y, self.level_info, theme)
                 if self.state == "vs_result" and getattr(self, "vs_finish_y", None) is not None:
                     try:
                         self.draw_vs_finish_line(surf, theme)
@@ -2469,9 +3677,62 @@ class Game:
         pygame.draw.circle(surf, (255,255,220), (coin_bg.x+19, coin_bg.centery-3), 4)
         pygame.draw.circle(surf, (255,255,255,120), (coin_bg.x+19, coin_bg.centery-3), 1)
         coin_txt = self.font_big.render(f"{self.save.get('total_coins',0)}", True, (255,255,255))
+        # FAZ5: HUD coin flash (pop scale when just collected)
+        try:
+            _cf = getattr(self, '_hud_coin_flash', 0)
+            if _cf > 0:
+                scale = 1.0 + _cf*0.18
+                # scale via font size trick: just glow
+                gfx.draw_glow(surf, (coin_bg.centerx, coin_bg.centery), 22, (255,215,0), int(30*_cf))
+        except: pass
         surf.blit(coin_txt, (coin_bg.x+40, coin_bg.y+6))
         plus = self.font_small.render(f"+{self.player.coins}", True, (255,238,130))
         surf.blit(plus, (coin_bg.x+40+coin_txt.get_width()+8, coin_bg.y+13))
+        # FAZ5: combo HUD (center top)
+        try:
+            if getattr(self, 'combo', 0) >= 2:
+                _ct = getattr(self, 'combo_timer', 0)
+                _alpha = int(180 * min(1, _ct/1.6)) if _ct>0 else 0
+                if _alpha>20:
+                    cbg = pygame.Rect(config.SCREEN_WIDTH//2-62, 8, 124, 22)
+                    pygame.draw.rect(surf, (0,0,0,90), cbg, border_radius=8)
+                    pygame.draw.rect(surf, (255,215,0,120), cbg, width=1, border_radius=8)
+                    ctxt = self.font_small.render(f"COMBO x{self.combo}", True, (255,238,130))
+                    surf.blit(ctxt, (cbg.centerx - ctxt.get_width()//2, cbg.centery - ctxt.get_height()//2))
+                    if self.combo >= 4:
+                        gfx.draw_glow(surf, cbg.center, 16, (255,215,0), 16)
+        except: pass
+        # FAZ6: weapon HUD (bottom left, small)
+        try:
+            wid = self.save.get("equipped_weapon","fist")
+            w = config.get_weapon(wid)
+            # cooldown progress
+            cd = getattr(self.player, 'attack_cooldown', 0) if hasattr(self, 'player') else 0
+            max_cd = w["cooldown"]
+            prog = 1 - (cd / max_cd) if max_cd>0 else 1
+            prog = max(0,min(1,prog))
+            wbg = pygame.Rect(12, config.SCREEN_HEIGHT-28, 140, 18)
+            pygame.draw.rect(surf, (0,0,0,90), wbg, border_radius=6)
+            pygame.draw.rect(surf, (80,220,255,120) if wid=="beam_sword" else (200,200,180,120), wbg, width=1, border_radius=6)
+            # cooldown bar
+            if prog < 1:
+                bar = pygame.Rect(wbg.x+2, wbg.y+2, int((wbg.width-4)*prog), wbg.height-4)
+                pygame.draw.rect(surf, (80,220,255) if wid=="beam_sword" else (255,220,180), bar, border_radius=4)
+            wtxt = self.font_tiny.render(f"{w['name']}", True, (255,255,255))
+            surf.blit(wtxt, (wbg.centerx - wtxt.get_width()//2, wbg.centery - wtxt.get_height()//2))
+            if cd > 0:
+                gfx.draw_glow(surf, wbg.center, 10, (255,80,80), 12)
+        except: pass
+        # FAZ9: monster proximity vignette (subtle)
+        try:
+            _mc = getattr(self, '_monster_close', 0)
+            if _mc > 0.18 and self.state in ("playing","vs_bot","vs_online"):
+                _a = int(22*_mc)
+                _vig2 = pygame.Surface((config.SCREEN_WIDTH, config.SCREEN_HEIGHT), pygame.SRCALPHA)
+                _vig2.fill((0,0,0, _a))
+                surf.blit(_vig2, (0,0))
+                gfx.draw_vignette(surf, intensity=0.10*_mc)
+        except: pass
         # progress bar — shimmer (bölümde bitişe kadar, sonsuzda sonraki seviyeye)
         if self.level_mode is not None and self.level_target_px is not None:
             start_m = self.level_start_y / config.PIXELS_PER_METER
@@ -2616,7 +3877,7 @@ class Game:
                 ("↓ / S", "Hızlı düş / Yuvarlan"),
                 ("SPACE", "Oyunu duraklat"),
                 ("H", "Bu yardımı aç"),
-                ("M", "İzmir Marşı ♫")]
+                ("M", "Müzik Aç/Kapat")]
         y = ctrl_card.y + 56
         for label, desc in keys:
             kc = keycap(ctrl_card.x+18, y, 118, 30, label, hot=(label in ("↑ / W","H")))
@@ -2838,23 +4099,168 @@ class Game:
         surf.blit(hint, (box.centerx - hint.get_width()//2, box.y+340))
 
     def draw_menu(self, surf, theme):
-        # zengin gradient bg + vignette
+        # Intro — siyah FREEFALL
+        if getattr(self, 'intro_state', 'skip') == "logo":
+            surf.fill((8,8,10))
+            t = self.intro_timer
+            alpha = int(255 * min(1, t*1.8))
+            if t > 0.4:
+                title = self.font_huge.render("FREEFALL", True, (255,255,255))
+                title.set_alpha(alpha)
+                surf.blit(title, (config.SCREEN_WIDTH//2 - title.get_width()//2, config.SCREEN_HEIGHT//2 - 30))
+                sub = self.font_small.render("aşağıya düşüş başlıyor...", True, (180,180,190))
+                sub.set_alpha(int(alpha*0.7))
+                surf.blit(sub, (config.SCREEN_WIDTH//2 - sub.get_width()//2, config.SCREEN_HEIGHT//2 + 18))
+                hint = self.font_tiny.render("SPACE/ENTER ile geç", True, (120,120,130))
+                if t > 1.2:
+                    surf.blit(hint, (config.SCREEN_WIDTH//2 - hint.get_width()//2, config.SCREEN_HEIGHT-30))
+            return
+        # FAZ12: opening cinematic 7.2s (12 adim)
+        if getattr(self, 'opening_state', 'skip') == "opening":
+            surf.fill((8,8,10))
+            t = self.opening_timer
+            # fade in/out
+            alpha = 255
+            if t < 0.4:
+                alpha = int(255 * t/0.4)
+            elif t > 6.6:
+                alpha = int(255 * (7.2 - t)/0.6)
+            alpha = max(0, min(255, alpha))
+            gfx.draw_vignette(surf, intensity=0.22)
+            # step timing
+            # 0.5-1.4 Bir adım attın.
+            # 1.5-2.4 Zemin kayboldu.
+            # 2.5-3.4 Ve düşmeye başladın.
+            # 3.5-4.6 silüet
+            # 4.7-5.3 symbol edge
+            # 5.4-6.6 Bu düşüşün sonu neresi?
+            y0 = config.SCREEN_HEIGHT//2 - 40
+            def _fade_txt(txt, col, y, appear, hold=0.9):
+                if t < appear or t > appear+hold+0.3:
+                    return
+                a = alpha
+                if t < appear+0.22:
+                    a = int(alpha * (t-appear)/0.22)
+                elif t > appear+hold:
+                    a = int(alpha * (appear+hold+0.3 - t)/0.3)
+                a = max(0, min(255, a))
+                s = self.font_med.render(txt, True, col)
+                s.set_alpha(a)
+                surf.blit(s, (config.SCREEN_WIDTH//2 - s.get_width()//2, y))
+            _fade_txt("Bir adım attın.", (255,255,255), y0, 0.5)
+            _fade_txt("Zemin kayboldu.", (255,255,255), y0+32, 1.5)
+            _fade_txt("Ve düşmeye başladın.", (255,215,0), y0+64, 2.5)
+            # silüet 3.5-4.6
+            if 3.5 < t < 4.7:
+                a = int(alpha * (1 if t<4.4 else (4.7-t)/0.3))
+                a = max(0, min(255, a))
+                # simple silhouette: small player at center
+                sx = config.SCREEN_WIDTH//2; sy = y0+110
+                # glow behind
+                gfx.draw_glow(surf, (sx, sy), 18, (200,200,210), int(14*a/255))
+                # body
+                pygame.draw.rect(surf, (60,60,70, a), pygame.Rect(sx-10, sy-10, 20, 26), border_radius=6)
+                pygame.draw.circle(surf, (255,220,180, a), (sx, sy-16), 8)
+                # symbol at edge 4.7-5.3
+            if 4.7 < t < 5.6:
+                a2 = 0
+                if t < 5.0:
+                    a2 = int(90 * (t-4.7)/0.3)
+                elif t < 5.3:
+                    a2 = 90
+                else:
+                    a2 = int(90 * (5.6 - t)/0.3)
+                a2 = max(0, min(90, a2))
+                sym = self.font_small.render(config.REPEATING_SYMBOL, True, (255,255,255))
+                sym.set_alpha(a2)
+                surf.blit(sym, (config.SCREEN_WIDTH-40, 24))
+            _fade_txt("Bu düşüşün sonu neresi?", (180,220,255), y0+110, 5.4)
+            hint = self.font_tiny.render("ESC / SPACE / ENTER ile geç", True, (120,120,130))
+            hint.set_alpha(int(alpha*0.5))
+            surf.blit(hint, (config.SCREEN_WIDTH//2 - hint.get_width()//2, config.SCREEN_HEIGHT-28))
+            return
+        # zengin gradient bg + tema atmosferi + low-cost menu particles
         gfx.vertical_gradient(surf, tuple(min(255,c+18) for c in theme["bg"]), tuple(max(0,c-14) for c in theme["bg"]))
+        self._theme_atmosphere(surf, theme)
+        # menu bg particles (max 15, tema particle rengi + tema tipi)
+        tid = theme.get("id", "")
+        for p in getattr(self, 'menu_particles', []):
+            col = theme.get("particle", (200,200,210))
+            if not (isinstance(col, (list,tuple)) and len(col)==3):
+                continue
+            px, py = int(p['x']), int(p['y'])
+            if tid in ("ice", "arctic_night"):
+                pygame.draw.line(surf, col, (px-3, py), (px+3, py), 1)
+                pygame.draw.line(surf, col, (px, py-3), (px, py+3), 1)
+                pygame.draw.circle(surf, col, (px, py), 1)
+            elif tid in ("forest", "toxic_green"):
+                pygame.draw.circle(surf, col, (px, py), 2)
+                pygame.draw.line(surf, col, (px, py), (px+3, py-3), 1)
+            elif tid in ("ocean",):
+                pygame.draw.circle(surf, col, (px, py), 2, 1)
+            elif tid in ("neon_cyan", "retro_arcade"):
+                pygame.draw.rect(surf, col, (px-2, py-2, 4, 4))
+            else:
+                pygame.draw.circle(surf, col, (px, py), 2)
+                gfx.draw_glow(surf, (px, py), 6, col, 12)
         gfx.draw_vignette(surf, intensity=0.13 if theme["id"]=="beyaz" else 0.22)
-        # subtle top glow
-        glow = pygame.Surface((config.SCREEN_WIDTH, 180), pygame.SRCALPHA)
-        for i in range(90):
-            a=int(16*(1-i/90))
-            pygame.draw.line(glow,(255,255,255,a),(0,i),(config.SCREEN_WIDTH,i))
-        surf.blit(glow,(0,0))
-        # başlık — 3D extrusion
-        title = self.font_huge.render("FREEFALL", True, theme["hud"])
-        for off, col in [(3,(0,0,0,64)),(2,(0,0,0,92))]:
-            sh = self.font_huge.render("FREEFALL", True, (0,0,0))
-            sh.set_alpha(col[3] if len(col)==4 else 80)
-            surf.blit(sh, (config.SCREEN_WIDTH//2 - title.get_width()//2 + off, 44+off))
-        surf.blit(title, (config.SCREEN_WIDTH//2 - title.get_width()//2, 42))
-        gfx.draw_glow(surf, (config.SCREEN_WIDTH//2, 62), 56, (255,215,0), 18 if theme["id"]!="siyah" else 10)
+        # subtle top glow (cached, per-frame Surface yok)
+        if not hasattr(self, '_menu_glow') or self._menu_glow is None:
+            try:
+                glow = pygame.Surface((config.SCREEN_WIDTH, 180), pygame.SRCALPHA)
+                for i in range(90):
+                    a=int(16*(1-i/90))
+                    pygame.draw.line(glow,(255,255,255,a),(0,i),(config.SCREEN_WIDTH,i))
+                self._menu_glow = glow
+            except:
+                self._menu_glow = None
+        if getattr(self, '_menu_glow', None) is not None:
+            surf.blit(self._menu_glow,(0,0))
+        # başlık — logo cache + tema glow + kısa giriş (k<=1) + FAZ8 idle pulse
+        k = min(1.0, getattr(self, '_menu_enter_t', 1.0))
+        y_off = int((1.0 - k) * 12)
+        # FAZ8: subtle logo pulse (scale 1.015, glow 16±3) - dt tabanlı, cache'i bozmadan
+        _pulse = 1.0 + math.sin(self.menu_bg_time*1.9)*0.015 if k>=1 else 1.0
+        _glow_a = 16 + int(math.sin(self.menu_bg_time*2.1)*3) if k>=1 else 16
+        tkey = (theme.get("id",""), tuple(theme.get("hud",(30,30,30))[:3]))
+        cached = self._logo_cache.get(tkey)
+        if cached is None:
+            try:
+                _t = self.font_huge.render("FREEFALL", True, theme["hud"])
+                _sh = self.font_huge.render("FREEFALL", True, (0,0,0))
+                self._logo_cache[tkey] = (_t, _sh)
+                if len(self._logo_cache) > 30:
+                    self._logo_cache.pop(next(iter(self._logo_cache)))
+            except:
+                cached = None
+        if cached is not None:
+            title, sh = cached
+            sh.set_alpha(80)
+            # pulse scale via smoothscale (küçük, 1.015 max) - sadece k==1'de
+            if _pulse != 1.0:
+                try:
+                    sw, sh2 = title.get_size()
+                    pw, ph = int(sw*_pulse), int(sh2*_pulse)
+                    p_title = pygame.transform.smoothscale(title, (pw, ph))
+                    p_sh = pygame.transform.smoothscale(sh, (pw, ph))
+                    surf.blit(p_sh, (config.SCREEN_WIDTH//2 - pw//2 + 3, 44 + y_off + 3))
+                    surf.blit(p_title, (config.SCREEN_WIDTH//2 - pw//2, 42 + y_off))
+                except:
+                    surf.blit(sh, (config.SCREEN_WIDTH//2 - title.get_width()//2 + 3, 44 + y_off + 3))
+                    surf.blit(title, (config.SCREEN_WIDTH//2 - title.get_width()//2, 42 + y_off))
+            else:
+                surf.blit(sh, (config.SCREEN_WIDTH//2 - title.get_width()//2 + 3, 44 + y_off + 3))
+                if k < 1.0:
+                    title.set_alpha(int(255*k))
+                else:
+                    title.set_alpha(255)
+                surf.blit(title, (config.SCREEN_WIDTH//2 - title.get_width()//2, 42 + y_off))
+        else:
+            title = self.font_huge.render("FREEFALL", True, theme["hud"])
+            surf.blit(title, (config.SCREEN_WIDTH//2 - title.get_width()//2, 42 + y_off))
+        _lg = theme.get("glow", (255,215,0,60))
+        _lg3 = (_lg[0], _lg[1], _lg[2]) if isinstance(_lg,(list,tuple)) and len(_lg)>=3 else (255,215,0)
+        gfx.draw_glow(surf, (config.SCREEN_WIDTH//2, 62 + y_off), 56, _lg3, _glow_a)
         sub = self.font_med.render("Dikey Düşüş  —  Aşağı İn, Sıkışma, Hayatta Kal", True, theme["hud"])
         surf.blit(sub, (config.SCREEN_WIDTH//2 - sub.get_width()//2, 92))
         # info pill — glass
@@ -2874,13 +4280,21 @@ class Game:
         pygame.draw.rect(surf, (0,0,0,48) if "siyah" in theme["id"] else (255,255,255,200), prof_box, border_radius=8)
         pygame.draw.rect(surf, (255,215,0,90), prof_box, width=1, border_radius=8)
         surf.blit(prof, (prof_box.centerx - prof.get_width()//2, prof_box.centery - prof.get_height()//2))
-        # mini karakter önizleme — glass card
+        # FAZ10: adaptive for 11 options
+        _n = len(self.menu_options)
+        if _n > 10:
+            _pb_y = 142
+            btn_w, btn_h = 320, 38; start_y = 182; gap = 42
+        else:
+            _pb_y = 148
+            btn_w, btn_h = 326, 44; start_y = 194; gap = 50
+        # mini karakter önizleme — glass card + FAZ7 idle (FAZ8 polish: subtle bob)
         ch = self.get_char_data()
         eq = self.get_equipped()
-        preview_box = pygame.Rect(config.SCREEN_WIDTH//2 - 76, 148, 152, 38)
+        preview_box = pygame.Rect(config.SCREEN_WIDTH//2 - 76, _pb_y, 152, 38)
         gfx.draw_soft_shadow(surf, preview_box, radius=10, alpha=22)
         gfx.glass_panel(surf, preview_box, fill=(255,255,255,210) if theme["id"]=="beyaz" else (38,38,44,210), border=(0,0,0,36), radius=9)
-        cx = preview_box.centerx; cy = preview_box.centery
+        cx = preview_box.centerx; cy = preview_box.centery + int(math.sin(self.menu_bg_time*2.0)*1.8)
         gfx.draw_glow(surf,(cx,cy-4),14,ch["accent"],22)
         pygame.draw.rect(surf, ch["color"], pygame.Rect(cx-13, cy-8, 26, 19), border_radius=5)
         pygame.draw.rect(surf,(0,0,0,160), pygame.Rect(cx-13, cy-8, 26, 19), width=1, border_radius=5)
@@ -2888,8 +4302,9 @@ class Game:
         pygame.draw.circle(surf,(0,0,0,160),(cx, cy-12), 9, 1)
         if eq["hat"]:
             pygame.draw.rect(surf, (200,30,30), pygame.Rect(cx-11, cy-21, 22, 6), border_radius=3)
-        btn_w, btn_h = 326, 44; start_y = 194; gap = 50
         mx,my = pygame.mouse.get_pos()
+        _acc = theme.get("accent", (255,215,0))
+        _acc3 = (_acc[0], _acc[1], _acc[2]) if isinstance(_acc,(list,tuple)) and len(_acc)>=3 else (255,215,0)
         for i, opt in enumerate(self.menu_options):
             bx = config.SCREEN_WIDTH//2 - btn_w//2; by = start_y + i*gap
             rect = pygame.Rect(bx, by, btn_w, btn_h)
@@ -2897,38 +4312,49 @@ class Game:
             selected = i==self.menu_index
             is_exit = opt=="CIKIS"
             base = theme["button"]
-            # selected → gold gradient
+            # FAZ8: basılma 1.5px aşağı + hafif squash, hover 6x3 büyütme
+            is_press = (getattr(self,'_btn_press_idx',-1)==i and getattr(self,'_btn_press_t',0)>0)
+            press_dy = 2 if is_press else 0
+            if is_press:
+                draw_rect = rect.inflate(-2, -1).move(0, press_dy)
+            elif hover and not selected:
+                draw_rect = rect.inflate(6, 3)
+            else:
+                draw_rect = rect
+            # selected → gold gradient (korundu)
             if selected or hover:
                 # soft shadow
-                gfx.draw_soft_shadow(surf, rect, radius=12, alpha=26)
+                gfx.draw_soft_shadow(surf, draw_rect, radius=12, alpha=26)
                 # gold bevel for selected
                 top = (255,228,110) if selected else tuple(min(255,c+18) for c in base)
                 bot = (255,185,0) if selected else tuple(max(0,c-14) for c in base)
-                btn_surf = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
-                for y in range(rect.height):
-                    ts=y/rect.height
+                btn_surf = pygame.Surface((draw_rect.width, draw_rect.height), pygame.SRCALPHA)
+                for y in range(draw_rect.height):
+                    ts=y/draw_rect.height
                     rr=int(top[0]*(1-ts)+bot[0]*ts); gg=int(top[1]*(1-ts)+bot[1]*ts); bb=int(top[2]*(1-ts)+bot[2]*ts)
-                    pygame.draw.line(btn_surf,(rr,gg,bb),(0,y),(rect.width,y))
-                mask = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
-                pygame.draw.rect(mask,(255,255,255),(0,0,rect.width,rect.height), border_radius=11)
+                    pygame.draw.line(btn_surf,(rr,gg,bb),(0,y),(draw_rect.width,y))
+                mask = pygame.Surface((draw_rect.width, draw_rect.height), pygame.SRCALPHA)
+                pygame.draw.rect(mask,(255,255,255),(0,0,draw_rect.width,draw_rect.height), border_radius=11)
                 btn_surf.blit(mask,(0,0), special_flags=pygame.BLEND_RGBA_MULT)
-                surf.blit(btn_surf, rect.topleft)
-                pygame.draw.rect(surf,(255,215,0) if selected else (255,255,255,140), rect, width=3 if selected else 2, border_radius=11)
-                pygame.draw.line(surf,(255,255,255,92),(rect.x+10,rect.y+5),(rect.right-10,rect.y+5),1)
+                surf.blit(btn_surf, draw_rect.topleft)
+                pygame.draw.rect(surf,(255,215,0) if selected else _acc3, draw_rect, width=3 if selected else 2, border_radius=11)
+                pygame.draw.line(surf,(255,255,255,92),(draw_rect.x+10,draw_rect.y+5),(draw_rect.right-10,draw_rect.y+5),1)
+                if hover and not selected:
+                    gfx.draw_glow(surf, draw_rect.center, 16, _acc3, 18)
                 if selected:
-                    gfx.draw_glow(surf, rect.center, 20, (255,215,0), 22)
+                    gfx.draw_glow(surf, draw_rect.center, 20, (255,215,0), 22)
                     arrow = self.font_med.render("►", True, (255,215,0,220))
                     # glow arrow
-                    surf.blit(arrow, (bx-26, rect.centery - arrow.get_height()//2))
+                    surf.blit(arrow, (bx-26, draw_rect.centery - arrow.get_height()//2))
             else:
-                pygame.draw.rect(surf, base, rect, border_radius=11)
-                pygame.draw.rect(surf,(0,0,0,110), rect, width=2, border_radius=11)
-                pygame.draw.line(surf,(255,255,255,44),(rect.x+10,rect.y+5),(rect.right-10,rect.y+5),1)
+                pygame.draw.rect(surf, base, draw_rect, border_radius=11)
+                pygame.draw.rect(surf,(0,0,0,110), draw_rect, width=2, border_radius=11)
+                pygame.draw.line(surf,(255,255,255,44),(draw_rect.x+10,draw_rect.y+5),(draw_rect.right-10,draw_rect.y+5),1)
             txt_col = (28,18,4) if (selected or hover) else ((255,255,255) if theme["id"] in ("siyah","kirmizi_siyah","siyah_mavi","mor_mavi") else (30,30,34))
             if is_exit and not (selected or hover):
                 txt_col=(168,24,24) if "siyah" not in theme["id"] else (255,104,104)
             t = self.font_med.render(opt, True, txt_col)
-            surf.blit(t, (rect.centerx - t.get_width()//2, rect.centery - t.get_height()//2))
+            surf.blit(t, (draw_rect.centerx - t.get_width()//2, draw_rect.centery - t.get_height()//2))
         hint = self.font_small.render("↑↓ Seç  •  ENTER/SPACE Onayla  •  Mouse & Scroll", True, (theme["hud"][0],theme["hud"][1],theme["hud"][2], 210) if len(theme["hud"])==3 else theme["hud"])
         # ensure tuple
         hint_col = tuple(max(0,min(255,c)) for c in theme["hud"]) if isinstance(theme["hud"],(list,tuple)) else (30,30,30)
@@ -2936,26 +4362,29 @@ class Game:
         hint_surf = self.font_small.render("↑↓ Seç  •  ENTER/SPACE Onayla  •  Mouse & Scroll", True, hint_col)
         hint_surf.set_alpha(180)
         surf.blit(hint_surf, (config.SCREEN_WIDTH//2 - hint_surf.get_width()//2, config.SCREEN_HEIGHT-28))
-        ver = self.font_tiny.render("v1.2  •  Tek Can  •  Sonsuz Dünya  •  60 FPS", True, hint_col)
+        try:
+            _fps_lab = self._fps_label(self.save.get("settings",{}).get("fps_limit",60))
+        except:
+            _fps_lab = "60 FPS"
+        ver = self.font_tiny.render(f"v1.2  •  Tek Can  •  Sonsuz Dünya  •  {_fps_lab}", True, hint_col)
         ver.set_alpha(140)
         surf.blit(ver, (10, config.SCREEN_HEIGHT-15))
-        # İzmir Marşı ipucu
-        mars_hint = self.font_tiny.render("M: ♫ İzmir Marşı", True, hint_col)
+        # FAZ14: M — genel muzik toggle ipucu (legacy kaldirildi)
+        is_muted = not getattr(audio, "music_enabled", True)
+        mars_hint = self.font_tiny.render("M: ♫ Müzik Kapalı" if is_muted else "M: ♫ Müzik", True, (200,20,30) if is_muted else hint_col)
         mars_hint.set_alpha(170)
-        # seçiliyse vurgula
-        if self.izmir_marsi_playing:
-            mars_hint = self.font_tiny.render("M: ♫ Çalıyor... (tekrar M)", True, (200,20,30))
         surf.blit(mars_hint, (config.SCREEN_WIDTH - mars_hint.get_width() - 10, config.SCREEN_HEIGHT-15))
 
     def draw_shop(self, surf, theme):
         surf.fill(theme["bg"])
+        gfx.draw_vignette(surf, intensity=0.13 if theme["id"]=="beyaz" else 0.22)
         title = self.font_big.render("MAGAZA", True, theme["hud"])
         surf.blit(title, (config.SCREEN_WIDTH//2 - title.get_width()//2, 14))
-        coin = self.font_med.render(f"COIN: {self.save['total_coins']}", True, (120,90,0))
+        coin = self.font_med.render(f"COIN: {self.save['total_coins']}", True, (120,90,0) if theme["id"]=="beyaz" else (255,215,0))
         surf.blit(coin, (config.SCREEN_WIDTH-160, 18))
         hint = self.font_small.render("←→ Kategori  |  ↑↓/W-S Kaydır  |  ENTER Satın Al/Kuşan  |  ESC Menu", True, theme["hud"])
         surf.blit(hint, (config.SCREEN_WIDTH//2 - hint.get_width()//2, 46))
-        tabs = ["SAPKA","CANTA","GOZLUK","BASTON"]
+        tabs = ["SAPKA","CANTA","GOZLUK","BASTON","SİLAH"]
         tab_w = 110; gap=12; total_w=len(tabs)*tab_w+(len(tabs)-1)*gap; start_x=config.SCREEN_WIDTH//2-total_w//2
         mx,my = pygame.mouse.get_pos()
         for i,t in enumerate(tabs):
@@ -2971,6 +4400,7 @@ class Game:
             surf.blit(txt, (r.centerx - txt.get_width()//2, r.centery - txt.get_height()//2))
         lay = self._list_layout("shop")
         lst = lay["lst"]
+        _, key = self.current_shop_list()
         self.shop_scroll = max(0, min(self.shop_scroll, lay["max_scroll"]))
         list_y = lay["list_y"]
         step = lay["step"]
@@ -2995,6 +4425,11 @@ class Game:
             if sel:
                 gfx.draw_glow(surf, r.center, 16, (255,215,0), 18)
                 pygame.draw.rect(surf, (255,215,0), r, width=3, border_radius=11)
+            # FAZ5: purchase flash
+            if item["id"] in getattr(self, '_shop_flash', {}) and self._shop_flash[item["id"]]>0:
+                _a = int(120 * min(1, self._shop_flash[item["id"]]/0.6))
+                gfx.draw_glow(surf, r.center, 18, (80,220,120), _a)
+                pygame.draw.rect(surf, (80,220,120), r, width=4, border_radius=11)
             pygame.draw.line(surf,(255,255,255,52),(r.x+10,r.y+5),(r.right-10,r.y+5),1)
             icon_r=pygame.Rect(r.x+12, r.y+11, 54, 54)
             gfx.draw_soft_shadow(surf, icon_r, radius=6, alpha=18)
@@ -3009,12 +4444,17 @@ class Game:
                 surf.blit(ic, (icon_r.centerx-ic.get_width()//2, icon_r.centery-ic.get_height()//2))
             name=self.font_med.render(item["name"], True, (18,18,22) if theme["id"] not in ("siyah","kirmizi_siyah","siyah_mavi","mor_mavi") else (238,238,242))
             surf.blit(name, (r.x+80, r.y+14))
-            owned=item["id"] in self.save["owned_items"]
-            if owned:
+            # FAZ6: weapon owned check
+            if key == "weapon":
+                owned=item["id"] in self.save.get("owned_weapons", ["fist"])
+                using=(self.save.get("equipped_weapon","fist")==item["id"])
+            else:
+                owned=item["id"] in self.save["owned_items"]
                 using=False
                 for k,sk in (("hat","selected_hat"),("bag","selected_bag"),("glasses","selected_glasses"),("cane","selected_cane")):
                     if item["id"] in config.SHOP_ITEMS[k] and self.save.get(sk)==item["id"]:
                         using=True; break
+            if owned:
                 status="● KULLANILIYOR" if using else "SATIN ALINDI — ENTER ile Kuşan"
                 col_s=(16,148,52) if using else (92,92,96)
                 st=self.font_small.render(status, True, col_s)
@@ -3049,9 +4489,10 @@ class Game:
 
     def draw_characters(self, surf, theme):
         surf.fill(theme["bg"])
+        gfx.draw_vignette(surf, intensity=0.13 if theme["id"]=="beyaz" else 0.22)
         title=self.font_big.render("KARAKTERLER", True, theme["hud"])
         surf.blit(title, (config.SCREEN_WIDTH//2 - title.get_width()//2, 14))
-        hint=self.font_small.render("Yön: Sec  |  ENTER: Seç  |  ESC: Menu", True, theme["hud"])
+        hint=self.font_small.render("Yön: Seç  |  ENTER: Seç  |  ESC: Menü", True, theme["hud"])
         surf.blit(hint, (config.SCREEN_WIDTH//2 - hint.get_width()//2, 42))
         info=self.font_small.render(f"Seviye: {self.save.get('level',1)}  |  Seçili: {self.get_char_data()['name']}", True, theme["hud"])
         surf.blit(info, (config.SCREEN_WIDTH//2 - info.get_width()//2, 62))
@@ -3081,11 +4522,13 @@ class Game:
                 gfx.draw_glow(surf, r.center, 16, (255,215,0), 18)
                 pygame.draw.rect(surf, (255,215,0), r, width=3, border_radius=11)
             pygame.draw.line(surf,(255,255,255,38),(r.x+10,r.y+5),(r.right-10,r.y+5),1)
-            preview_r=pygame.Rect(r.x+14, r.y+14, 52, 52)
+            # FAZ7: subtle idle bob for preview
+            _bob = int(math.sin(pygame.time.get_ticks()*0.002 + idx*0.7)*1.2) if unlocked else 0
+            preview_r=pygame.Rect(r.x+14, r.y+14+_bob, 52, 52)
             pygame.draw.rect(surf, ch["color"], preview_r, border_radius=8)
             pygame.draw.rect(surf, (0,0,0), preview_r, width=2, border_radius=8)
             pygame.draw.circle(surf, ch["accent"], (preview_r.right-10, preview_r.bottom-10), 7)
-            # kafa ikonu
+            # kafa ikonu (with same bob)
             pygame.draw.circle(surf, (255,220,180), (preview_r.centerx, preview_r.centery+2), 9)
             name=self.font_med.render(ch["name"], True, (0,0,0) if unlocked and theme["id"] not in ("siyah","kirmizi_siyah","siyah_mavi","mor_mavi") else (230,230,230) if unlocked else (80,80,80))
             surf.blit(name, (r.x+78, r.y+16))
@@ -3109,14 +4552,27 @@ class Game:
                 cos_txt=", ".join(cosmetic) if cosmetic else "Kozmetik yok"
                 ct=self.font_tiny.render(cos_txt, True, (60,60,60))
                 surf.blit(ct, (r.x+14, r.y+106))
+        # FAZ11: karakter lore paneli (seçili karakter)
+        try:
+            _ch = config.CHARACTERS[self.char_index] if 0 <= self.char_index < len(config.CHARACTERS) else None
+            if _ch:
+                _lore = config.CHARACTER_LORE.get(_ch["id"], "")
+                if _lore:
+                    _lp = pygame.Rect(80, config.SCREEN_HEIGHT-52, config.SCREEN_WIDTH-160, 36)
+                    gfx.draw_soft_shadow(surf, _lp, radius=10, alpha=18)
+                    gfx.glass_panel(surf, _lp, fill=(255,255,255,200) if theme["id"]=="beyaz" else (30,30,36,200), border=(0,0,0,80), radius=8)
+                    _lt = self.font_small.render(_lore, True, (30,30,34) if theme["id"]=="beyaz" else (230,230,240))
+                    surf.blit(_lt, (_lp.centerx - _lt.get_width()//2, _lp.centery - _lt.get_height()//2))
+        except: pass
 
     def draw_inventory(self, surf, theme):
         surf.fill(theme["bg"])
+        gfx.draw_vignette(surf, intensity=0.13 if theme["id"]=="beyaz" else 0.22)
         title=self.font_big.render("ENVANTER", True, theme["hud"])
         surf.blit(title, (config.SCREEN_WIDTH//2 - title.get_width()//2, 14))
-        hint=self.font_small.render("←→ Kategori  |  ↑↓/W-S Kaydır  |  ENTER Kuşan/Çıkar  |  ESC Menu", True, theme["hud"])
+        hint=self.font_small.render("←→ Kategori  |  ↑↓/W-S Kaydır  |  ENTER Kuşan/Çıkar  |  ESC Menü", True, theme["hud"])
         surf.blit(hint, (config.SCREEN_WIDTH//2 - hint.get_width()//2, 44))
-        tabs=["SAPKA","CANTA","GOZLUK","BASTON"]
+        tabs=["SAPKA","CANTA","GOZLUK","BASTON","SİLAH"]
         tab_w=110; gap=12; total_w=len(tabs)*tab_w+(len(tabs)-1)*gap; start_x=config.SCREEN_WIDTH//2-total_w//2
         for i,t in enumerate(tabs):
             r=pygame.Rect(start_x+i*(tab_w+gap),68,tab_w,28)
@@ -3128,7 +4584,7 @@ class Game:
             txt=self.font_small.render(t, True, (0,0,0) if theme["id"] not in ("siyah","kirmizi_siyah","siyah_mavi","mor_mavi") else (255,255,255))
             surf.blit(txt, (r.centerx-txt.get_width()//2, r.centery-txt.get_height()//2))
         lay = self._list_layout("inventory")
-        key=["hat","bag","glasses","cane"][self.inv_tab]
+        key=["hat","bag","glasses","cane","weapon"][self.inv_tab]
         owned=lay["lst"]
         if not owned:
             msg=self.font_med.render("Bu kategoride eşyan yok — Mağazaya git!", True, theme["hud"])
@@ -3141,7 +4597,11 @@ class Game:
             step = lay["step"]
             row_h = lay["row_h"]
             vb = lay["viewport_bottom"]
-            sel_key={"hat":"selected_hat","bag":"selected_bag","glasses":"selected_glasses","cane":"selected_cane"}[key]
+            # FAZ6: weapon sel_key handling
+            if key == "weapon":
+                sel_key = "equipped_weapon"
+            else:
+                sel_key={"hat":"selected_hat","bag":"selected_bag","glasses":"selected_glasses","cane":"selected_cane"}[key]
             old_clip = surf.get_clip()
             surf.set_clip(pygame.Rect(0, list_y, config.SCREEN_WIDTH, vb - list_y))
             for idx,item in enumerate(owned):
@@ -3167,7 +4627,10 @@ class Game:
                     surf.blit(ic, (icon_r.centerx-ic.get_width()//2, icon_r.centery-ic.get_height()//2))
                 name=self.font_med.render(item["name"], True, (0,0,0) if theme["id"] not in ("siyah","kirmizi_siyah","siyah_mavi","mor_mavi") else (255,255,255))
                 surf.blit(name, (r.x+80,r.y+14))
-                using=self.save.get(sel_key)==item["id"]
+                if key == "weapon":
+                    using=self.save.get("equipped_weapon","fist")==item["id"]
+                else:
+                    using=self.save.get(sel_key)==item["id"]
                 st=self.font_small.render("● KULLANILIYOR" if using else "ENTER ile Kuşan", True, (0,150,0) if using else (90,90,90))
                 surf.blit(st, (r.x+80,r.y+40))
             surf.set_clip(old_clip)
@@ -3181,6 +4644,7 @@ class Game:
 
     def draw_themes(self, surf, theme):
         surf.fill(theme["bg"])
+        gfx.draw_vignette(surf, intensity=0.13 if theme["id"]=="beyaz" else 0.22)
         title=self.font_big.render("TEMALAR", True, theme["hud"])
         surf.blit(title, (config.SCREEN_WIDTH//2 - title.get_width()//2, 14))
         hint=self.font_small.render("Yön: Seç  |  ENTER: Uygula  |  ESC: Menu", True, theme["hud"])
@@ -3189,106 +4653,314 @@ class Game:
         surf.blit(cur_txt, (config.SCREEN_WIDTH//2 - cur_txt.get_width()//2, 62))
         cols=4; card_w,card_h=190,110; gap_x,gap_y=18,16
         start_x=config.SCREEN_WIDTH//2 - (cols*card_w+(cols-1)*gap_x)//2; start_y=88
+        # scroll: cursor satırı görünür tut (28 tema için)
+        cur_row = (self.theme_index // cols) if getattr(self,'theme_index',0) else 0
+        total_rows = (len(config.THEMES) + cols - 1)//cols
+        vis_rows = 4
+        first_row = max(0, min(cur_row - 1, max(0, total_rows - vis_rows)))
+        y_off = first_row * (card_h + gap_y)
         for idx,t in enumerate(config.THEMES):
             row=idx//cols; col=idx%cols
-            x=start_x+col*(card_w+gap_x); y=start_y+row*(card_h+gap_y)
+            x=start_x+col*(card_w+gap_x); y=start_y+row*(card_h+gap_y) - y_off
+            if y + card_h < start_y or y > config.SCREEN_HEIGHT - 10:
+                continue
             r=pygame.Rect(x,y,card_w,card_h)
             is_cur=t["id"]==self.save.get("theme","beyaz")
             is_cursor=idx==self.theme_index
+            is_owned=t["id"] in self._owned_theme_ids()
             gfx.draw_soft_shadow(surf, r, radius=10, alpha=22 if is_cursor or is_cur else 14)
-            pygame.draw.rect(surf, t["bg"], r, border_radius=11)
+            pygame.draw.rect(surf, t["bg"] if is_owned else (110,110,115), r, border_radius=11)
             pygame.draw.rect(surf, (0,0,0,130), r, width=2, border_radius=11)
             if is_cur:
                 gfx.draw_glow(surf, r.center, 16, (0,180,0), 18)
                 pygame.draw.rect(surf,(0,188,72), r, width=4, border_radius=11)
             if is_cursor:
-                gfx.draw_glow(surf, r.center, 14, (255,215,0), 18)
-                pygame.draw.rect(surf,(255,215,0), r, width=3, border_radius=11)
+                _hg = t.get("accent", (255,215,0))
+                _hg3 = (_hg[0],_hg[1],_hg[2]) if isinstance(_hg,(list,tuple)) and len(_hg)>=3 else (255,215,0)
+                gfx.draw_glow(surf, r.center, 14, _hg3, 18)
+                pygame.draw.rect(surf,_hg3, r, width=3, border_radius=11)
             pygame.draw.line(surf,(255,255,255,42),(r.x+8,r.y+5),(r.right-8,r.y+5),1)
             btn_preview=pygame.Rect(r.x+12, r.y+34, r.width-24, 24)
-            pygame.draw.rect(surf, t["button"], btn_preview, border_radius=6)
+            pygame.draw.rect(surf, t["button"] if is_owned else (130,130,135), btn_preview, border_radius=6)
             pygame.draw.rect(surf,(0,0,0), btn_preview, width=1, border_radius=6)
-            name=self.font_small.render(t["name"], True, t["ui_text"])
+            name=self.font_small.render(t["name"], True, t["ui_text"] if is_owned else (90,90,95))
             surf.blit(name, (r.centerx - name.get_width()//2, r.y+10))
             btn_txt=self.font_tiny.render("Buton Önizleme", True, (0,0,0) if t["id"] not in ("siyah","kirmizi_siyah","siyah_mavi","mor_mavi") else (255,255,255))
             surf.blit(btn_txt, (btn_preview.centerx - btn_txt.get_width()//2, btn_preview.centery - btn_txt.get_height()//2))
-            status=self.font_tiny.render("✓ SEÇİLİ" if is_cur else "ENTER ile Seç", True, (0,120,0) if is_cur else (60,60,60))
+            # atmosfer preview noktaları: accent / glow / particle
+            try:
+                _ac = t.get("accent", t["button"]); _gl = t.get("glow", t["button"]); _pa = t.get("particle", t["button"])
+                _ac3 = (_ac[0],_ac[1],_ac[2]) if isinstance(_ac,(list,tuple)) and len(_ac)>=3 else (200,200,200)
+                _gl3 = (_gl[0],_gl[1],_gl[2]) if isinstance(_gl,(list,tuple)) and len(_gl)>=3 else (200,200,200)
+                _pa3 = (_pa[0],_pa[1],_pa[2]) if isinstance(_pa,(list,tuple)) and len(_pa)>=3 else (200,200,200)
+                for dx, cc in ((-14,_ac3),(0,_gl3),(14,_pa3)):
+                    pygame.draw.circle(surf, cc, (r.centerx+dx, r.y+92), 5)
+                    pygame.draw.circle(surf, (0,0,0), (r.centerx+dx, r.y+92), 5, 1)
+            except: pass
+            status=self.font_tiny.render("✓ SEÇİLİ" if is_cur else ("🔒 KİLİTLİ" if not is_owned else "ENTER ile Seç"), True, (0,120,0) if is_cur else (150,40,40) if not is_owned else (60,60,60))
             surf.blit(status, (r.centerx - status.get_width()//2, r.y+70))
             if is_cur:
                 check=self.font_med.render("✓", True, (0,150,0))
                 surf.blit(check, (r.right-18, r.y+6))
+        # alt preview: hover/cursor temasının atmosferi (bg/accent/glow/particle)
+        try:
+            hov = config.THEMES[self.theme_index] if 0 <= self.theme_index < len(config.THEMES) else theme
+            bar = pygame.Rect(config.SCREEN_WIDTH//2 - 220, config.SCREEN_HEIGHT - 44, 440, 30)
+            pygame.draw.rect(surf, hov.get("bg", (40,40,44)), bar, border_radius=8)
+            pygame.draw.rect(surf, (0,0,0,120), bar, width=1, border_radius=8)
+            _ac = hov.get("accent", (255,215,0)); _gl = hov.get("glow", (255,215,0)); _pa = hov.get("particle", (200,200,200))
+            _ac3 = (_ac[0],_ac[1],_ac[2]) if isinstance(_ac,(list,tuple)) and len(_ac)>=3 else (255,215,0)
+            _gl3 = (_gl[0],_gl[1],_gl[2]) if isinstance(_gl,(list,tuple)) and len(_gl)>=3 else (255,215,0)
+            _pa3 = (_pa[0],_pa[1],_pa[2]) if isinstance(_pa,(list,tuple)) and len(_pa)>=3 else (200,200,200)
+            nm = self.font_small.render(f"Önizleme: {hov.get('name','')}", True, hov.get("ui_text",(255,255,255)))
+            surf.blit(nm, (bar.x+12, bar.centery - nm.get_height()//2))
+            for i, cc in enumerate((_ac3, _gl3, _pa3)):
+                pygame.draw.circle(surf, cc, (bar.right-60+i*20, bar.centery), 7)
+                pygame.draw.circle(surf, (0,0,0), (bar.right-60+i*20, bar.centery), 7, 1)
+        except: pass
+
+    # ---------- FAZ13: Settings helpers (safe display + layout) ----------
+    def _settings_layout(self):
+        """FAZ13: settings card + row rects — draw ve mouse icin tek kaynak."""
+        card = pygame.Rect(40, 68, config.SCREEN_WIDTH-80, 530)
+        # slider rows: 0,1,2
+        s_y0 = card.y + 18
+        s_step = 56
+        bars = []
+        for i in range(3):
+            y = s_y0 + i*s_step
+            bar = pygame.Rect(card.x+210, y+18, 380, 14)
+            bars.append((y, bar))
+        # toggle rows: 3 tutorial, 4 fullscreen, 5 fps, 6 resolution, 7 controls
+        t_y = s_y0 + 3*s_step + 12  # tutorial
+        rows = {}
+        rows[3] = pygame.Rect(card.x+14, t_y, card.width-28, 36)
+        rows[4] = pygame.Rect(card.x+14, t_y+44, card.width-28, 36)
+        rows[5] = pygame.Rect(card.x+14, t_y+88, card.width-28, 36)
+        rows[6] = pygame.Rect(card.x+14, t_y+132, card.width-28, 36)
+        rows[7] = pygame.Rect(card.x+14, t_y+176, card.width-28, 36)
+        # geri button
+        back = pygame.Rect(card.centerx-90, card.bottom-38, 180, 34)
+        return {"card": card, "bars": bars, "rows": rows, "back": back, "t_y": t_y}
+
+    def _try_apply_display(self, fullscreen=None, resolution=None):
+        """FAZ13: fullscreen/resolution degisimini guvenli uygula. Basarisizsa fallback.
+        Main loop'un screen referansini tazelemesi icin _display_changed bayragi ayarlar."""
+        try:
+            s = self.save.get("settings", {})
+            fs = bool(s.get("fullscreen", False)) if fullscreen is None else bool(fullscreen)
+            res = str(s.get("resolution", "900x700")) if resolution is None else str(resolution)
+            # Android'de PC display ayarlari uygulanmaz (letterbox korunur)
+            try:
+                from android_controls import is_android as _is_and
+                if _is_and():
+                    return True
+            except:
+                pass
+            if fs:
+                # fullscreen: desktop native kullan (0,0) en guvenli
+                try:
+                    pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+                except:
+                    # fallback: istenen cozunurluk ile fullscreen dene
+                    try:
+                        w, h = map(int, res.split("x"))
+                        pygame.display.set_mode((w, h), pygame.FULLSCREEN)
+                    except:
+                        pygame.display.set_mode((config.SCREEN_WIDTH, config.SCREEN_HEIGHT), pygame.FULLSCREEN)
+            else:
+                # windowed: istenen cozunurluk, basarisizsa 900x700
+                try:
+                    w, h = map(int, res.split("x"))
+                    if (w, h) not in [(900,700),(1280,720),(1600,900),(1920,1080)]:
+                        w, h = 900, 700
+                    pygame.display.set_mode((w, h))
+                except:
+                    pygame.display.set_mode((config.SCREEN_WIDTH, config.SCREEN_HEIGHT))
+            self._display_changed = True
+            return True
+        except Exception as e:
+            print(f"[Display] apply fail: {e}")
+            try:
+                pygame.display.set_mode((config.SCREEN_WIDTH, config.SCREEN_HEIGHT))
+                self._display_changed = True
+            except:
+                pass
+            return False
+
+    def _fps_label(self, v):
+        try:
+            iv = int(v)
+        except:
+            iv = 60
+        if iv == 0:
+            return "SINIRSIZ"
+        return f"{iv} FPS"
+
+    def _resolution_label(self, r):
+        return str(r)
 
     def draw_settings(self, surf, theme):
         surf.fill(theme["bg"])
         title=self.font_big.render("AYARLAR", True, theme["hud"])
-        surf.blit(title, (config.SCREEN_WIDTH//2 - title.get_width()//2, 20))
+        surf.blit(title, (config.SCREEN_WIDTH//2 - title.get_width()//2, 14))
         hint=self.font_small.render("↑↓ Seç  |  ←→ Ayarla  |  ENTER Onayla  |  ESC Geri  |  Mouse ile sürükle", True, theme["hud"])
-        surf.blit(hint, (config.SCREEN_WIDTH//2 - hint.get_width()//2, 52))
-        # kart arka plan
-        card = pygame.Rect(80, 80, config.SCREEN_WIDTH-160, 360)
-        pygame.draw.rect(surf, (255,255,255), card, border_radius=12)
-        pygame.draw.rect(surf, (0,0,0), card, width=2, border_radius=12)
+        surf.blit(hint, (config.SCREEN_WIDTH//2 - hint.get_width()//2, 42))
+        lay = self._settings_layout()
+        card = lay["card"]
+        # glass card (larger, holds 9 rows)
+        gfx.draw_soft_shadow(surf, card, radius=16, alpha=32)
+        gfx.glass_panel(surf, card, fill=(255,255,255,242) if theme["id"]=="beyaz" else (38,38,44,242), border=(0,0,0,110), radius=14)
+        pygame.draw.rect(surf, (255,215,0), pygame.Rect(card.x, card.y, card.width, 6), border_radius=4)
         s = self.save["settings"]
-        labels = [("MASTER SES", s["master"], "Genel ses seviyesi"), ("MÜZİK", s["music"], "Arka plan müziği"), ("EFEKTLER", s["sfx"], "Coin / zıplama / ölüm efektleri")]
         mx,my = pygame.mouse.get_pos()
+        # --- sliders 0..2 ---
+        labels = [("MASTER SES", s.get("master",0.7), "Genel ses seviyesi"), ("MÜZİK", s.get("music",0.5), "Arka plan müziği"), ("EFEKTLER", s.get("sfx",0.8), "Coin / zıplama / ölüm efektleri")]
+        bars = lay["bars"]
         for i,(label, val, desc) in enumerate(labels):
-            y = 120 + i*62
+            y, bar = bars[i]
             is_sel = self.settings_index == i
-            # label
-            txt = self.font_med.render(label, True, (0,0,0) if is_sel else (60,60,60))
+            hover = bar.collidepoint(mx,my) or pygame.Rect(card.x+14, y-4, card.width-28, 36).collidepoint(mx,my)
+            if is_sel:
+                pygame.draw.rect(surf, (255,215,0, 28), pygame.Rect(card.x+14, y-4, card.width-28, 36), border_radius=8)
+            # selection border for row
+            if is_sel:
+                pygame.draw.rect(surf, (255,215,0), pygame.Rect(card.x+14, y-4, card.width-28, 36), width=2, border_radius=8)
+            elif hover:
+                pygame.draw.rect(surf, (0,0,0,18), pygame.Rect(card.x+14, y-4, card.width-28, 36), border_radius=8)
+            txt = self.font_med.render(label, True, (0,0,0) if is_sel else (30,30,34) if theme["id"]=="beyaz" else (230,230,240))
             surf.blit(txt, (card.x+18, y))
-            # bar
-            bar = pygame.Rect(260, y+18, 380, 14)
+            # bar bg
             pygame.draw.rect(surf, (220,220,220), bar, border_radius=7)
-            fill = pygame.Rect(bar.x, bar.y, int(bar.width*val), bar.height)
+            fill = pygame.Rect(bar.x, bar.y, int(bar.width*max(0,min(1,val))), bar.height)
             col = (255,215,0) if is_sel else (120,180,255) if i==1 else (100,200,100)
             pygame.draw.rect(surf, col, fill, border_radius=7)
             pygame.draw.rect(surf, (0,0,0), bar, width=1, border_radius=7)
-            # knob
-            kx = bar.x + int(bar.width*val)
+            kx = bar.x + int(bar.width*max(0,min(1,val)))
             pygame.draw.circle(surf, (0,0,0), (kx, bar.centery), 9)
             pygame.draw.circle(surf, (255,255,255), (kx, bar.centery), 6)
             if is_sel:
                 pygame.draw.rect(surf, (255,215,0), pygame.Rect(bar.x-2, bar.y-2, bar.width+4, bar.height+4), width=2, border_radius=8)
-            # değer
-            vtxt = self.font_small.render(f"{int(val*100)}%", True, (0,0,0))
+            vtxt = self.font_small.render(f"{int(max(0,min(1,val))*100)}%", True, (0,0,0) if theme["id"]=="beyaz" else (30,30,34))
             surf.blit(vtxt, (bar.right+12, bar.y-2))
-            d = self.font_tiny.render(desc, True, (100,100,100))
+            d = self.font_tiny.render(desc, True, (100,100,100) if theme["id"]=="beyaz" else (170,170,180))
             surf.blit(d, (card.x+18, y+28))
-        # tutorial toggle
-        y = 310
+        # --- toggle rows 3..7 ---
+        rows = lay["rows"]
+        # 3 TUTORIAL
+        y_row = rows[3]
         is_sel = self.settings_index == 3
-        pygame.draw.rect(surf, (255,215,0) if is_sel else (0,0,0), pygame.Rect(card.x+14, y-4, card.width-28, 36), width=2, border_radius=8)
-        tlbl = self.font_med.render("TUTORIAL GÖSTER", True, (0,0,0))
-        surf.blit(tlbl, (card.x+18, y+6))
-        cb = pygame.Rect(card.x+card.width-46, y+6, 22, 22)
-        checked = s.get("show_tutorial", True)
+        hover = y_row.collidepoint(mx,my)
+        if is_sel:
+            pygame.draw.rect(surf, (255,215,0), y_row, width=2, border_radius=8)
+            gfx.draw_glow(surf, y_row.center, 16, (255,215,0), 12)
+        elif hover:
+            pygame.draw.rect(surf, (0,0,0,14), y_row, border_radius=8)
+        tlbl = self.font_med.render("TUTORIAL GÖSTER", True, (0,0,0) if theme["id"]=="beyaz" else (240,240,250))
+        surf.blit(tlbl, (y_row.x+12, y_row.centery - tlbl.get_height()//2))
+        cb = pygame.Rect(y_row.right-38, y_row.centery-11, 22, 22)
+        checked = bool(s.get("show_tutorial", True))
         pygame.draw.rect(surf, (255,255,255), cb, border_radius=4)
         pygame.draw.rect(surf, (0,0,0), cb, width=2, border_radius=4)
         if checked:
             pygame.draw.rect(surf, (0,180,0), pygame.Rect(cb.x+3, cb.y+3, 16, 16), border_radius=3)
             chk = self.font_small.render("✓", True, (255,255,255))
             surf.blit(chk, (cb.centerx - chk.get_width()//2, cb.centery - chk.get_height()//2))
-        # geri butonu
-        is_back_sel = self.settings_index == 4
-        back = pygame.Rect(card.centerx-90, card.bottom-44, 180, 34)
-        hover = back.collidepoint(mx,my)
-        col = (255,215,0) if is_back_sel or hover else (230,230,230)
-        pygame.draw.rect(surf, col, back, border_radius=8)
-        pygame.draw.rect(surf, (0,0,0), back, width=2, border_radius=8)
-        if is_back_sel: pygame.draw.rect(surf, (255,215,0), back, width=3, border_radius=8)
-        btxt = self.font_med.render("GERİ (ESC)", True, (0,0,0))
+        # 4 FULLSCREEN
+        y_row = rows[4]
+        is_sel = self.settings_index == 4
+        hover = y_row.collidepoint(mx,my)
+        if is_sel:
+            pygame.draw.rect(surf, (255,215,0), y_row, width=2, border_radius=8)
+            gfx.draw_glow(surf, y_row.center, 14, (255,215,0), 10)
+        elif hover:
+            pygame.draw.rect(surf, (0,0,0,12), y_row, border_radius=8)
+        flbl = self.font_med.render("TAM EKRAN", True, (0,0,0) if theme["id"]=="beyaz" else (240,240,250))
+        surf.blit(flbl, (y_row.x+12, y_row.centery - flbl.get_height()//2))
+        fs_val = bool(s.get("fullscreen", False))
+        fs_txt = self.font_small.render("AÇIK" if fs_val else "KAPALI", True, (0,140,0) if fs_val else (160,40,40))
+        surf.blit(fs_txt, (y_row.right-88, y_row.centery - fs_txt.get_height()//2))
+        # toggle visual
+        tog = pygame.Rect(y_row.right-38, y_row.centery-10, 32, 18)
+        pygame.draw.rect(surf, (0,180,0) if fs_val else (180,180,180), tog, border_radius=9)
+        pygame.draw.rect(surf, (0,0,0), tog, width=1, border_radius=9)
+        knob_x = tog.x+5 if not fs_val else tog.right-13
+        pygame.draw.circle(surf, (255,255,255), (knob_x+4, tog.centery), 6)
+        pygame.draw.circle(surf, (0,0,0), (knob_x+4, tog.centery), 6, 1)
+        hint_fs = self.font_tiny.render("F11 ile hızlı aç/kapat", True, (100,100,110) if theme["id"]=="beyaz" else (170,170,180))
+        surf.blit(hint_fs, (y_row.x+12, y_row.y+24))
+        # 5 FPS
+        y_row = rows[5]
+        is_sel = self.settings_index == 5
+        hover = y_row.collidepoint(mx,my)
+        if is_sel:
+            pygame.draw.rect(surf, (255,215,0), y_row, width=2, border_radius=8)
+        elif hover:
+            pygame.draw.rect(surf, (0,0,0,12), y_row, border_radius=8)
+        flbl2 = self.font_med.render("FPS LİMİTİ", True, (0,0,0) if theme["id"]=="beyaz" else (240,240,250))
+        surf.blit(flbl2, (y_row.x+12, y_row.centery - flbl2.get_height()//2))
+        fps_v = int(s.get("fps_limit", 60))
+        fps_txt = self.font_small.render(self._fps_label(fps_v), True, (0,0,0) if theme["id"]=="beyaz" else (200,220,255))
+        surf.blit(fps_txt, (y_row.right-110, y_row.centery - fps_txt.get_height()//2))
+        # arrows
+        arr_l = self.font_small.render("◀", True, (80,80,90))
+        arr_r = self.font_small.render("▶", True, (80,80,90))
+        surf.blit(arr_l, (y_row.right-148, y_row.centery - arr_l.get_height()//2))
+        surf.blit(arr_r, (y_row.right-42, y_row.centery - arr_r.get_height()//2))
+        hint_fps = self.font_tiny.render("30/60/90/120/Sınırsız — dt bağımsız fizik korunur", True, (100,100,110) if theme["id"]=="beyaz" else (170,170,180))
+        surf.blit(hint_fps, (y_row.x+12, y_row.y+24))
+        # 6 RESOLUTION
+        y_row = rows[6]
+        is_sel = self.settings_index == 6
+        hover = y_row.collidepoint(mx,my)
+        if is_sel:
+            pygame.draw.rect(surf, (255,215,0), y_row, width=2, border_radius=8)
+        elif hover:
+            pygame.draw.rect(surf, (0,0,0,12), y_row, border_radius=8)
+        rlbl = self.font_med.render("ÇÖZÜNÜRLÜK", True, (0,0,0) if theme["id"]=="beyaz" else (240,240,250))
+        surf.blit(rlbl, (y_row.x+12, y_row.centery - rlbl.get_height()//2))
+        res_v = str(s.get("resolution","900x700"))
+        res_txt = self.font_small.render(res_v, True, (0,0,0) if theme["id"]=="beyaz" else (200,220,255))
+        surf.blit(res_txt, (y_row.right-116, y_row.centery - res_txt.get_height()//2))
+        surf.blit(arr_l, (y_row.right-154, y_row.centery - arr_l.get_height()//2))
+        surf.blit(arr_r, (y_row.right-42, y_row.centery - arr_r.get_height()//2))
+        hint_res = self.font_tiny.render("Pencere boyutu — tam ekranda etkisiz, güvenli fallback 900x700", True, (100,100,110) if theme["id"]=="beyaz" else (170,170,180))
+        surf.blit(hint_res, (y_row.x+12, y_row.y+24))
+        # 7 CONTROLS
+        y_row = rows[7]
+        is_sel = self.settings_index == 7
+        hover = y_row.collidepoint(mx,my)
+        if is_sel:
+            pygame.draw.rect(surf, (255,215,0), y_row, width=2, border_radius=8)
+            gfx.draw_glow(surf, y_row.center, 12, (255,215,0), 10)
+        elif hover:
+            pygame.draw.rect(surf, (0,0,0,12), y_row, border_radius=8)
+        clbl = self.font_med.render("KONTROLLER", True, (0,0,0) if theme["id"]=="beyaz" else (240,240,250))
+        surf.blit(clbl, (y_row.x+12, y_row.centery - clbl.get_height()//2))
+        cinfo = self.font_tiny.render("←→ Hareket  ↑ Zıpla  ↓ Hızlı Düş  SPACE Duraklat  ESC Menü  F/J Saldır  H Yardım  M Marş  F11 Tam Ekran", True, (60,60,70) if theme["id"]=="beyaz" else (200,200,210))
+        # wrap if needed
+        if cinfo.get_width() > y_row.width - 120:
+            # split
+            surf.blit(self.font_tiny.render("←→ Hareket  ↑ Zıpla  ↓ Hızlı Düş  SPACE Pause  ESC Menü", True, (60,60,70) if theme["id"]=="beyaz" else (200,200,210)), (y_row.x+12, y_row.y+18))
+            surf.blit(self.font_tiny.render("F/J Saldır  H Yardım  M Marş  F11 Tam Ekran", True, (60,60,70) if theme["id"]=="beyaz" else (200,200,210)), (y_row.x+12, y_row.y+28))
+        else:
+            surf.blit(cinfo, (y_row.x+110, y_row.centery - cinfo.get_height()//2))
+        # geri button
+        back = lay["back"]
+        is_back_sel = self.settings_index == 8
+        hover_b = back.collidepoint(mx,my)
+        col = (255,215,0) if is_back_sel or hover_b else (230,230,230) if theme["id"]=="beyaz" else (60,60,66)
+        gfx.draw_soft_shadow(surf, back, radius=10, alpha=22 if is_back_sel or hover_b else 14)
+        pygame.draw.rect(surf, col, back, border_radius=10)
+        pygame.draw.rect(surf, (0,0,0), back, width=2, border_radius=10)
+        if is_back_sel:
+            pygame.draw.rect(surf, (255,215,0), back, width=3, border_radius=10)
+            gfx.draw_glow(surf, back.center, 14, (255,215,0), 16)
+        btxt = self.font_med.render("GERİ (ESC)", True, (0,0,0) if col==(255,215,0) or theme["id"]=="beyaz" else (255,255,255))
         surf.blit(btxt, (back.centerx - btxt.get_width()//2, back.centery - btxt.get_height()//2))
         # alt bilgi
-        info = self.font_tiny.render("Ayarlar save.json'a kaydedilir — eksik dosya olursa varsayılana dönülür.", True, theme["hud"])
-        surf.blit(info, (config.SCREEN_WIDTH//2 - info.get_width()//2, config.SCREEN_HEIGHT-22))
-        # kontroller kutusu
-        ctrl_y = card.bottom + 14
-        ctrl = pygame.Rect(80, ctrl_y, config.SCREEN_WIDTH-160, 38)
-        pygame.draw.rect(surf, (255,255,240), ctrl, border_radius=8)
-        pygame.draw.rect(surf, (0,0,0), ctrl, width=1, border_radius=8)
-        ct = self.font_tiny.render("Kontroller: ←→ Hareket  ↑ Zıpla  ↓ Hızlı Düş  SPACE Pause  ESC Menü  |  Tek Can — Sıkışırsan ölürsün!", True, (60,60,60))
-        surf.blit(ct, (ctrl.centerx - ct.get_width()//2, ctrl.centery - ct.get_height()//2))
+        info = self.font_tiny.render("Ayarlar save.json'a kaydedilir — eksik dosya olursa varsayılana dönülür. 4GB RAM: particle cap + cache sınırlı.", True, theme["hud"])
+        surf.blit(info, (config.SCREEN_WIDTH//2 - info.get_width()//2, config.SCREEN_HEIGHT-14))
 
     def draw_levels(self, surf, theme):
         surf.fill(theme["bg"])
@@ -3359,6 +5031,181 @@ class Game:
                 gfx.draw_glow(surf, (r.right-16, r.centery), 10, (90,90,110), 12)
                 pygame.draw.circle(surf, (60,60,70), (r.right-16, r.centery), 7)
                 pygame.draw.circle(surf, (255,40,40), (r.right-16, r.centery), 3)
+        # FAZ11: seçili bölüm lore paneli
+        try:
+            sel = config.LEVELS[self.levels_index] if 0 <= self.levels_index < len(config.LEVELS) else None
+            if sel:
+                lvl = sel["level"]
+                unlocked = lvl in self.save.get("unlocked_levels",[1])
+                lore = config.LEVEL_LORE.get(lvl, {"title": sel["name"], "text": "", "detail": ""})
+                panel_lore = pygame.Rect(80, config.SCREEN_HEIGHT-78, config.SCREEN_WIDTH-160, 64)
+                gfx.draw_soft_shadow(surf, panel_lore, radius=12, alpha=22)
+                gfx.glass_panel(surf, panel_lore, fill=(255,255,255,210) if theme["id"]=="beyaz" else (30,30,36,210), border=(0,0,0,90), radius=10)
+                if not unlocked:
+                    txt = self.font_small.render("Henüz ulaşılmadı. Önce önceki bölümü tamamla.", True, (150,40,40) if theme["id"]=="beyaz" else (255,120,120))
+                    surf.blit(txt, (panel_lore.centerx - txt.get_width()//2, panel_lore.centery - txt.get_height()//2))
+                else:
+                    t1 = self.font_small.render(f"{lore['title']}: {lore['text']}", True, (20,20,24) if theme["id"]=="beyaz" else (240,240,250))
+                    # wrap if too long
+                    if t1.get_width() > panel_lore.width-20:
+                        # split
+                        words = f"{lore['title']}: {lore['text']}".split(" ")
+                        l1=""; l2=""
+                        for w in words:
+                            test = (l1+" "+w).strip()
+                            if self.font_small.size(test)[0] < panel_lore.width-20:
+                                l1=test
+                            else:
+                                l2+=w+" "
+                        surf.blit(self.font_small.render(l1.strip(), True, (20,20,24) if theme["id"]=="beyaz" else (240,240,250)), (panel_lore.x+12, panel_lore.y+10))
+                        surf.blit(self.font_tiny.render(l2.strip(), True, (80,80,90) if theme["id"]=="beyaz" else (180,180,190)), (panel_lore.x+12, panel_lore.y+32))
+                        det = self.font_tiny.render(lore.get("detail",""), True, (120,120,130) if theme["id"]=="beyaz" else (170,170,180))
+                        surf.blit(det, (panel_lore.right - det.get_width() -12, panel_lore.bottom-18))
+                    else:
+                        surf.blit(t1, (panel_lore.centerx - t1.get_width()//2, panel_lore.y+12))
+                        det = self.font_tiny.render(lore.get("detail",""), True, (120,120,130) if theme["id"]=="beyaz" else (170,170,180))
+                        surf.blit(det, (panel_lore.centerx - det.get_width()//2, panel_lore.y+32))
+        except: pass
+
+    def draw_stats(self, surf, theme):
+        surf.fill(theme["bg"])
+        gfx.draw_vignette(surf, intensity=0.18)
+        title=self.font_big.render("İSTATİSTİKLER", True, theme["hud"])
+        surf.blit(title, (config.SCREEN_WIDTH//2 - title.get_width()//2, 18))
+        hint=self.font_small.render("ESC ile dön", True, theme["hud"])
+        surf.blit(hint, (config.SCREEN_WIDTH//2 - hint.get_width()//2, 48))
+        stats=self.save.get("statistics",{})
+        # panel
+        panel=pygame.Rect(80, 80, config.SCREEN_WIDTH-160, 460)
+        gfx.draw_soft_shadow(surf, panel, radius=18, alpha=42)
+        gfx.glass_panel(surf, panel, fill=(255,255,255,242) if theme["id"]=="beyaz" else (38,38,44,242), border=(0,0,0,110), radius=14)
+        # rows
+        rows=[
+            ("Toplam Coin", str(self.save.get("total_coins",0))),
+            ("Bölüm", f"{len(self.save.get('completed_levels',[]))} / {len(config.LEVELS)}"),
+            ("Yıldız", str(sum(self.save.get("level_stars",{}).values()))),
+            ("En Yüksek Combo", f"x{stats.get('max_combo',0)}"),
+            ("Ölüm", str(stats.get("total_deaths",0))),
+            ("Finish", str(stats.get("levels_completed",0))),
+            ("Oynama Süresi", f"{int(stats.get('total_play_time',0)//60)} dk"),
+            ("En İyi Mesafe", f"{self.save.get('best_distance',0):.1f} m"),
+            ("Açılan Karakter", f"{len(self.save.get('unlocked_characters',[]))} / {len(config.CHARACTERS)}"),
+            ("Açılan Eşya", f"{len(self.save.get('owned_items',[]))} / {sum(len(v) for v in config.SHOP_ITEMS.values())}"),
+        ]
+        y=panel.y+18
+        for label, val in rows:
+            lbl=self.font_med.render(label, True, (30,30,34) if theme["id"]=="beyaz" else (230,230,240))
+            surf.blit(lbl, (panel.x+22, y))
+            vsurf=self.font_med.render(val, True, (0,120,60) if theme["id"]=="beyaz" else (120,220,140))
+            surf.blit(vsurf, (panel.right-22 - vsurf.get_width(), y))
+            y+=38
+            pygame.draw.line(surf, (0,0,0,14), (panel.x+18, y-6), (panel.right-18, y-6), 1)
+        # back button
+        back=pygame.Rect(config.SCREEN_WIDTH//2-90, config.SCREEN_HEIGHT-60, 180, 36)
+        hover=back.collidepoint(pygame.mouse.get_pos())
+        col=(255,215,0) if hover else (230,230,230)
+        gfx.draw_soft_shadow(surf, back, radius=10, alpha=18 if hover else 12)
+        pygame.draw.rect(surf, col, back, border_radius=10)
+        pygame.draw.rect(surf, (0,0,0,120), back, width=2, border_radius=10)
+        txt=self.font_med.render("GERİ", True, (0,0,0))
+        surf.blit(txt, (back.centerx - txt.get_width()//2, back.centery - txt.get_height()//2))
+
+    def draw_achievements(self, surf, theme):
+        surf.fill(theme["bg"])
+        gfx.draw_vignette(surf, intensity=0.18)
+        title=self.font_big.render("BAŞARIMLAR", True, theme["hud"])
+        surf.blit(title, (config.SCREEN_WIDTH//2 - title.get_width()//2, 18))
+        hint=self.font_small.render("ESC ile dön", True, theme["hud"])
+        surf.blit(hint, (config.SCREEN_WIDTH//2 - hint.get_width()//2, 48))
+        ach=self.save.get("achievements",{})
+        # definition (id, name, desc)
+        defs=[
+            ("first_fall","İLK ADIM","İlk bölümü tamamla"),
+            ("deep10","KAÇIŞ","10 bölüm tamamla"),
+            ("final","ZİRVE","23 bölüm tamamla"),
+            ("combo6","KOMBO USTASI","Combo x6"),
+            ("coin100","HAZİNE AVCISI","100 coin topla"),
+            ("deep10b","YÜKSELİŞ","5 bölüm tamamla"),
+            ("collector","KOLEKSİYONCU","10 eşya aç"),
+            ("full_gear","TAM DONANIM","20 eşya aç"),
+        ]
+        panel=pygame.Rect(80, 80, config.SCREEN_WIDTH-160, 460)
+        gfx.draw_soft_shadow(surf, panel, radius=18, alpha=42)
+        gfx.glass_panel(surf, panel, fill=(255,255,255,242) if theme["id"]=="beyaz" else (38,38,44,242), border=(0,0,0,110), radius=14)
+        y=panel.y+16
+        for aid, name, desc in defs:
+            done = bool(ach.get(aid))
+            # icon
+            icon_col=(255,215,0) if done else (180,180,180)
+            pygame.draw.circle(surf, icon_col, (panel.x+30, y+14), 12)
+            pygame.draw.circle(surf, (0,0,0,120), (panel.x+30, y+14), 12, 1)
+            if done:
+                gfx.draw_glow(surf, (panel.x+30, y+14), 10, (255,215,0), 14)
+                chk=self.font_med.render("✓", True, (0,120,0))
+                surf.blit(chk, (panel.x+30 - chk.get_width()//2, y+14 - chk.get_height()//2))
+            else:
+                lk=self.font_small.render("?", True, (90,90,90))
+                surf.blit(lk, (panel.x+30 - lk.get_width()//2, y+14 - lk.get_height()//2))
+            nsurf=self.font_med.render(name, True, (20,20,24) if theme["id"]=="beyaz" else (240,240,250))
+            surf.blit(nsurf, (panel.x+60, y+2))
+            dsurf=self.font_tiny.render(desc, True, (90,90,96) if theme["id"]=="beyaz" else (180,180,190))
+            surf.blit(dsurf, (panel.x+60, y+22))
+            y+=44
+            pygame.draw.line(surf, (0,0,0,10), (panel.x+16, y-6), (panel.right-16, y-6), 1)
+            if y>panel.bottom-20:
+                break
+        back=pygame.Rect(config.SCREEN_WIDTH//2-90, config.SCREEN_HEIGHT-60, 180, 36)
+        hover=back.collidepoint(pygame.mouse.get_pos())
+        col=(255,215,0) if hover else (230,230,230)
+        gfx.draw_soft_shadow(surf, back, radius=10, alpha=18 if hover else 12)
+        pygame.draw.rect(surf, col, back, border_radius=10)
+        pygame.draw.rect(surf, (0,0,0,120), back, width=2, border_radius=10)
+        txt=self.font_med.render("GERİ", True, (0,0,0))
+        surf.blit(txt, (back.centerx - txt.get_width()//2, back.centery - txt.get_height()//2))
+
+    def draw_lore(self, surf, theme):
+        surf.fill(theme["bg"])
+        gfx.draw_vignette(surf, intensity=0.20)
+        title=self.font_big.render("HİKAYE", True, theme["hud"])
+        surf.blit(title, (config.SCREEN_WIDTH//2 - title.get_width()//2, 18))
+        sub=self.font_small.render("FREEFALL'ın düşüşü", True, theme["hud"])
+        surf.blit(sub, (config.SCREEN_WIDTH//2 - sub.get_width()//2, 48))
+        # genel hikaye
+        story=[
+            "Bir adım attın. Zemin kayboldu.",
+            "Şimdi sadece düşüyorsun.",
+            "Her katman farklı bir dünya.",
+            "Aşağı indikçe dünya daha garip hale geliyor.",
+            "Monster hep arkanda. Neden takip ediyor?",
+            f"Sembol {config.REPEATING_SYMBOL}  —  ilk HAVA'da, son FINAL'da.",
+        ]
+        panel=pygame.Rect(70, 80, config.SCREEN_WIDTH-140, 420)
+        gfx.draw_soft_shadow(surf, panel, radius=16, alpha=32)
+        gfx.glass_panel(surf, panel, fill=(255,255,255,230) if theme["id"]=="beyaz" else (30,30,36,230), border=(0,0,0,90), radius=12)
+        y=panel.y+16
+        for line in story:
+            txt=self.font_small.render(line, True, (30,30,34) if theme["id"]=="beyaz" else (230,230,240))
+            surf.blit(txt, (panel.centerx - txt.get_width()//2, y))
+            y+=28
+        # monster lore
+        y+=10
+        mlbl=self.font_med.render("MONSTER", True, (160,30,30) if theme["id"]=="beyaz" else (255,120,120))
+        surf.blit(mlbl, (panel.centerx - mlbl.get_width()//2, y))
+        y+=28
+        mtxt=self.font_small.render(config.MONSTER_LORE, True, (60,60,70) if theme["id"]=="beyaz" else (200,200,210))
+        surf.blit(mtxt, (panel.centerx - mtxt.get_width()//2, y))
+        y+=40
+        # 23 bölüme dair küçük ipucu
+        tip=self.font_tiny.render("BÖLÜMLER ekranında her bölümün kısa hikayesini görebilirsin. Sembol ◊'yı takip et.", True, (90,90,100) if theme["id"]=="beyaz" else (170,170,180))
+        surf.blit(tip, (panel.centerx - tip.get_width()//2, panel.bottom-20))
+        back=pygame.Rect(config.SCREEN_WIDTH//2-90, config.SCREEN_HEIGHT-60, 180, 36)
+        hover=back.collidepoint(pygame.mouse.get_pos())
+        col=(255,215,0) if hover else (230,230,230)
+        gfx.draw_soft_shadow(surf, back, radius=10, alpha=18 if hover else 12)
+        pygame.draw.rect(surf, col, back, border_radius=10)
+        pygame.draw.rect(surf, (0,0,0,120), back, width=2, border_radius=10)
+        txt=self.font_med.render("GERİ", True, (0,0,0))
+        surf.blit(txt, (back.centerx - txt.get_width()//2, back.centery - txt.get_height()//2))
 
     def draw_level_complete(self, surf, theme):
         overlay=pygame.Surface((config.SCREEN_WIDTH, config.SCREEN_HEIGHT), pygame.SRCALPHA)
@@ -3368,41 +5215,113 @@ class Game:
         data=self.level_complete_data or {}
         lvl=data.get("level",1); name=data.get("name",""); stars=data.get("stars",1)
         is_final=data.get("is_final", False)
-        box=pygame.Rect(config.SCREEN_WIDTH//2-220, config.SCREEN_HEIGHT//2-120, 440, 240)
-        gfx.draw_soft_shadow(surf, box, radius=22, alpha=64)
-        gfx.glass_panel(surf, box, fill=(255,255,255,242), border=(0,0,0,110), radius=16)
+        # FAZ10: panel scale-in (0.32s)
+        _t = min(1.0, getattr(self, 'level_complete_timer', 0)/0.32)
+        _scale = 0.88 + 0.12*_t
+        _alpha = int(242*_t)
+        box_w, box_h = 440, 240
+        # scale box around center
+        _bw, _bh = int(box_w*_scale), int(box_h*_scale)
+        box=pygame.Rect(config.SCREEN_WIDTH//2-_bw//2, config.SCREEN_HEIGHT//2-120 + (box_h-_bh)//2, _bw, _bh)
+        # use alpha for glass
+        gfx.draw_soft_shadow(surf, box, radius=22, alpha=int(64*_t))
+        # temporary surface for scale alpha
+        _panel = pygame.Surface((box_w, box_h), pygame.SRCALPHA)
+        gfx.glass_panel(_panel, pygame.Rect(0,0,box_w,box_h), fill=(255,255,255,_alpha), border=(0,0,0,110), radius=16)
+        surf.blit(pygame.transform.smoothscale(_panel, (_bw,_bh)), box.topleft)
         # üst şerit
         pygame.draw.rect(surf, (0,186,70) if not is_final else (90,40,180), pygame.Rect(box.x, box.y, box.width, 6), border_radius=4)
         title=self.font_big.render("BÖLÜM TAMAMLANDI!" if not is_final else "TÜM BÖLÜMLER BİTTİ!", True, (18,18,20))
+        title.set_alpha(int(255*_t))
         surf.blit(title, (box.centerx - title.get_width()//2, box.y+16))
         sub=self.font_med.render(f"BÖLÜM {lvl} — {name}", True, (60,60,70))
+        sub.set_alpha(int(255*_t))
         surf.blit(sub, (box.centerx - sub.get_width()//2, box.y+48))
-        # yıldızlar
+        # yıldızlar sequential: her 0.12s bir yıldız
         for s in range(3):
+            if _t < 0.18 + s*0.13: continue
             sx=box.centerx -28 + s*28; sy=box.y+82
             col=(255,215,0) if s < stars else (220,220,220)
-            star_sz=16 if s < stars else 12
-            pts=[(sx, sy-star_sz),(sx-6, sy+4),(sx-10, sy+star_sz),(sx, sy+8),(sx+10, sy+star_sz),(sx+6, sy+4)]
-            # basit yıldız
+            # pop scale for earned stars
+            _pop = 1.0
+            if s < stars:
+                _st = max(0, min(1, (_t - (0.18+s*0.13))/0.14))
+                _pop = 0.7 + 0.3*_st + 0.08*math.sin(_st*6)
+            # draw star with pop
+            pts_scale = _pop
+            # simple polygon with scale
+            _pts = [(sx, sy-10*pts_scale),(sx-4*pts_scale, sy-2*pts_scale),(sx-10*pts_scale, sy),(sx-4*pts_scale, sy+6*pts_scale),(sx, sy+12*pts_scale),(sx+4*pts_scale, sy+6*pts_scale),(sx+10*pts_scale, sy),(sx+4*pts_scale, sy-2*pts_scale)]
+            # use precomputed polygon
             pygame.draw.polygon(surf, col, [(sx, sy-10),(sx-4, sy-2),(sx-10, sy),(sx-4, sy+6),(sx, sy+12),(sx+4, sy+6),(sx+10, sy),(sx+4, sy-2)])
             pygame.draw.polygon(surf, (0,0,0), [(sx, sy-10),(sx-4, sy-2),(sx-10, sy),(sx-4, sy+6),(sx, sy+12),(sx+4, sy+6),(sx+10, sy),(sx+4, sy-2)],1)
             if s < stars:
-                gfx.draw_glow(surf, (sx, sy+2), 12, (255,215,0), 18)
-        # stats
+                gfx.draw_glow(surf, (sx, sy+2), int(12*_pop), (255,215,0), int(18*_pop))
+        # FAZ5: reward breakdown sequential (0.42s,0.54s,0.66s)
         dist=data.get("distance",0); coins=data.get("coins",0)
-        stat=self.font_small.render(f"Mesafe: {dist:.1f} m  •  Coin: +{coins}  •  Toplam: {self.save.get('total_coins',0)}", True, (80,80,90))
-        surf.blit(stat, (box.centerx - stat.get_width()//2, box.y+118))
-        # butonlar
+        base=data.get("base", coins); combo_b=data.get("combo_bonus",0); risk_b=data.get("risk_bonus",0); near=data.get("near_count",0); earned=data.get("earned", coins)
+        y0 = box.y+112
+        # coin row (0.42s)
+        if _t > 0.42:
+            _a1 = int(255*min(1, (_t-0.42)/0.18))
+            # coin icon pop
+            _pop_c = 1.0 + 0.12*math.sin(max(0,(_t-0.42)/0.12)*3) if _t<0.62 else 1.0
+            line1 = f"COIN  +{base}"
+            # add small coin icon (circle) before text - just text for now
+            stat=self.font_small.render(line1, True, (30,30,34))
+            stat.set_alpha(_a1)
+            # pop scale via transform
+            if _pop_c != 1.0:
+                try:
+                    stat = pygame.transform.smoothscale(stat, (int(stat.get_width()*_pop_c), int(stat.get_height()*_pop_c)))
+                except: pass
+            surf.blit(stat, (box.centerx - stat.get_width()//2, y0))
+        # combo row (0.54s)
+        if combo_b and _t > 0.54:
+            _a2 = int(255*min(1, (_t-0.54)/0.16))
+            line2 = f"COMBO  +{combo_b}" + (f"  •  NEAR x{near}" if near else "")
+            stat2=self.font_small.render(line2, True, (120,80,20))
+            stat2.set_alpha(_a2)
+            surf.blit(stat2, (box.centerx - stat2.get_width()//2, y0+16))
+        # risk row (0.66s)
+        if risk_b and _t > 0.66:
+            _a3 = int(255*min(1, (_t-0.66)/0.14))
+            line3 = f"RISK  +{risk_b}  •  TOPLAM  +{earned}"
+            stat3=self.font_small.render(line3, True, (160,40,20))
+            stat3.set_alpha(_a3)
+            surf.blit(stat3, (box.centerx - stat3.get_width()//2, y0+32 if combo_b else y0+16))
+        elif not combo_b and not risk_b and _t > 0.54:
+            _a3 = int(255*min(1, (_t-0.54)/0.16))
+            line3 = f"TOPLAM  +{earned}"
+            stat3=self.font_small.render(line3, True, (30,30,34))
+            stat3.set_alpha(_a3)
+            surf.blit(stat3, (box.centerx - stat3.get_width()//2, y0+16))
+        # total line always at bottom (0.78s)
+        if _t > 0.78:
+            sub2 = f"Mesafe: {dist:.1f} m  •  Toplam: {self.save.get('total_coins',0)}"
+            sub_surf=self.font_tiny.render(sub2, True, (110,110,118))
+            sub_surf.set_alpha(int(255*min(1, (_t-0.78)/0.12)))
+            surf.blit(sub_surf, (box.centerx - sub_surf.get_width()//2, y0+36 if (combo_b or risk_b) else y0+32))
+                # butonlar (0.88s fade-in)
+        _btn_a = int(255*min(1, max(0, (_t-0.88)/0.18)))
+        if _btn_a <= 0:
+            return
         if is_final:
             b1=pygame.Rect(box.x+60, box.bottom-52, 320, 38)
             hover=b1.collidepoint(pygame.mouse.get_pos())
             col=(90,40,180) if hover else (120,60,200)
-            gfx.draw_soft_shadow(surf, b1, radius=10, alpha=22)
-            pygame.draw.rect(surf, col, b1, border_radius=10)
-            pygame.draw.rect(surf, (0,0,0), b1, width=2, border_radius=10)
+            # unlock highlight for final is gold
+            gfx.draw_soft_shadow(surf, b1, radius=10, alpha=int(22*_btn_a/255))
+            # create button surface with alpha
+            _b1_surf = pygame.Surface((b1.width,b1.height), pygame.SRCALPHA)
+            _b1_surf.fill((*col, _btn_a))
+            surf.blit(_b1_surf, b1.topleft)
+            pygame.draw.rect(surf, (0,0,0,int(200*_btn_a/255)), b1, width=2, border_radius=10)
             txt=self.font_med.render("FİNALİ İZLE →", True, (255,255,255))
+            txt.set_alpha(_btn_a)
             surf.blit(txt, (b1.centerx - txt.get_width()//2, b1.centery - txt.get_height()//2))
         else:
+            # check if next level is newly unlocked
+            _is_new = (lvl+1) in self.save.get("unlocked_levels",[]) and lvl < len(config.LEVELS)
             b1=pygame.Rect(box.x+20, box.bottom-52, 190, 38)
             b2=pygame.Rect(box.x+230, box.bottom-52, 190, 38)
             mx,my=pygame.mouse.get_pos()
@@ -3410,11 +5329,20 @@ class Game:
                 hover=b.collidepoint(mx,my)
                 base=(0,150,70) if b==b1 else (60,60,70)
                 col=(0,180,90) if hover and b==b1 else (80,80,90) if hover else base
-                gfx.draw_soft_shadow(surf, b, radius=10, alpha=22 if hover else 14)
-                pygame.draw.rect(surf, col, b, border_radius=10)
-                pygame.draw.rect(surf, (0,0,0), b, width=2, border_radius=10)
-                if hover: pygame.draw.rect(surf, (255,215,0), b, width=2, border_radius=10)
+                # FAZ10: is_new highlight for next level
+                if _is_new and b==b1:
+                    col=(0,190,100)
+                    gfx.draw_glow(surf, b.center, 14, (255,215,0), int(18*_btn_a/255))
+                gfx.draw_soft_shadow(surf, b, radius=10, alpha=int((22 if hover else 14)*_btn_a/255))
+                # button surface with alpha
+                _bs = pygame.Surface((b.width,b.height), pygame.SRCALPHA)
+                _bs.fill((*col, _btn_a))
+                surf.blit(_bs, b.topleft)
+                pygame.draw.rect(surf, (0,0,0,int(200*_btn_a/255)), b, width=2, border_radius=10)
+                if hover:
+                    pygame.draw.rect(surf, (255,215,0,int(200*_btn_a/255)), b, width=2, border_radius=10)
                 t=self.font_med.render(txt_str, True, (255,255,255))
+                t.set_alpha(_btn_a)
                 surf.blit(t, (b.centerx - t.get_width()//2, b.centery - t.get_height()//2))
 
     def draw_ending(self, surf, theme):
@@ -3428,7 +5356,7 @@ class Game:
         gfx.draw_glow(surf, (config.SCREEN_WIDTH//2, config.SCREEN_HEIGHT//2+40), 140, (90,130,255), 18)
         # dünya arka planda hafif (son seviye)
         try:
-            self.world.draw(surf, self.camera.y, self.level_info)
+            self.world.draw(surf, self.camera.y, self.level_info, theme)
             self.player.draw(surf, self.camera.y, self.get_char_data(), self.get_equipped(), theme)
             if hasattr(self, 'monster'):
                 # canavar geride kalsın (sinematik)
@@ -3470,6 +5398,107 @@ class Game:
             pygame.draw.rect(surf, (0,0,0), btn, width=2, border_radius=10)
             txt2=self.font_med.render("ANA MENÜ", True, (0,0,0))
             surf.blit(txt2, (btn.centerx - txt2.get_width()//2, btn.centery - txt2.get_height()//2))
+
+    def draw_final_cinematic(self, surf, theme):
+        # FAZ12: 7 sahne, 19.5s, hafif sinematik
+        t = getattr(self, 'final_cinematic_timer', 0)
+        surf.fill((6,8,14))
+        gfx.draw_vignette(surf, intensity=0.28)
+        # slow dim
+        dim = int(18 * min(1, t/2.5))
+        over = pygame.Surface((config.SCREEN_WIDTH, config.SCREEN_HEIGHT), pygame.SRCALPHA)
+        over.fill((0,0,0, dim))
+        surf.blit(over, (0,0))
+        # helper fade
+        def _fade(txt, col, y, appear, hold=1.2):
+            if t < appear or t > appear+hold+0.4:
+                return
+            a = 255
+            if t < appear+0.3:
+                a = int(255 * (t-appear)/0.3)
+            elif t > appear+hold:
+                a = int(255 * (appear+hold+0.4 - t)/0.4)
+            a = max(0, min(255, a))
+            s = self.font_med.render(txt, True, col)
+            s.set_alpha(a)
+            surf.blit(s, (config.SCREEN_WIDTH//2 - s.get_width()//2, y))
+        # Scene 1: Oyuncu durur, kamera yavaş aşağı, kararma
+        _fade("Sonunda dibe ulaştın.", (255,255,255), config.SCREEN_HEIGHT//2-60, 0.4)
+        # Scene 2: Fakat burada hiçbir şey yoktu.
+        _fade("Fakat burada hiçbir şey yoktu.", (200,220,255), config.SCREEN_HEIGHT//2-30, 2.2)
+        # Scene 2b: symbol appears in different spots
+        if 2.8 < t < 4.5:
+            for i, (dx, dy) in enumerate([(-160,-80),(120,40),(0,70),(-80,20)]):
+                a2 = int(70 * max(0, min(1, (t-(2.8+i*0.2))/0.3)) * max(0, min(1, (4.5 - t)/0.4)))
+                if a2<=0: continue
+                sym = self.font_small.render(config.REPEATING_SYMBOL, True, (255,255,255))
+                sym.set_alpha(a2)
+                surf.blit(sym, (config.SCREEN_WIDTH//2 + dx - sym.get_width()//2, config.SCREEN_HEIGHT//2 + dy - sym.get_height()//2))
+                gfx.draw_glow(surf, (config.SCREEN_WIDTH//2+dx, config.SCREEN_HEIGHT//2+dy), 10, (255,255,255), int(a2*0.2))
+        # Scene 3: Onu daha önce görmüştün.
+        _fade("Onu daha önce görmüştün.", (255,215,0), config.SCREEN_HEIGHT//2-20, 5.0)
+        _fade("İlk düştüğün yerde.", (255,215,0), config.SCREEN_HEIGHT//2+10, 6.4)
+        _fade("Ve her katmanda.", (255,215,0), config.SCREEN_HEIGHT//2+40, 7.8)
+        # Scene 4: symbols converge
+        if 9.0 < t < 12.0:
+            prog = (t-9.0)/3.0
+            for i in range(5):
+                ang = i*72 + prog*30
+                rad = math.radians(ang)
+                dist = 80 * (1-prog*0.6)
+                x = config.SCREEN_WIDTH//2 + math.cos(rad)*dist
+                y = config.SCREEN_HEIGHT//2 + math.sin(rad)*dist*0.5
+                a3 = int(90 * (1-prog*0.3))
+                sym = self.font_small.render(config.REPEATING_SYMBOL, True, (255,255,255))
+                sym.set_alpha(a3)
+                surf.blit(sym, (int(x - sym.get_width()//2), int(y - sym.get_height()//2)))
+        # Scene 5: Monster silhouette
+        if 12.2 < t < 13.8:
+            a4 = int(180 * min(1, (t-12.2)/0.4) * min(1, (13.8-t)/0.4))
+            # silhouette at center bottom
+            mx = config.SCREEN_WIDTH//2
+            my = config.SCREEN_HEIGHT//2 + 60
+            # simple monster silhouette using theme glow
+            gfx.draw_glow(surf, (mx, my), 24, (90,90,110), int(a4*0.15))
+            # body as dark rect
+            s = pygame.Surface((60,40), pygame.SRCALPHA)
+            s.fill((20,20,30, a4))
+            surf.blit(s, (mx-30, my-20))
+            # eyes
+            pygame.draw.circle(surf, (255,60,60, a4), (mx-12, my-8), 3)
+            pygame.draw.circle(surf, (255,60,60, a4), (mx+12, my-8), 3)
+        # Scene 6: Belki de seni takip eden o değildi.
+        _fade("Belki de seni takip eden o değildi.", (220,220,230), config.SCREEN_HEIGHT//2-10, 14.2, hold=1.1)
+        _fade("Belki de sen onu takip ediyordun.", (220,220,230), config.SCREEN_HEIGHT//2+20, 15.8, hold=1.1)
+        # Scene 7: only symbol remains, then FREEFALL
+        if t > 17.0:
+            a5 = int(90 * min(1, (t-17.0)/0.6) * min(1, (19.5-t)/0.8)) if t<19.5 else 0
+            if a5>0:
+                sym = self.font_big.render(config.REPEATING_SYMBOL, True, (255,255,255))
+                # scale down slowly
+                sc = 1.0 - (t-17.0)*0.04
+                sc = max(0.6, sc)
+                sw, sh = sym.get_size()
+                sym2 = pygame.transform.smoothscale(sym, (int(sw*sc), int(sh*sc)))
+                sym2.set_alpha(a5)
+                surf.blit(sym2, (config.SCREEN_WIDTH//2 - sym2.get_width()//2, config.SCREEN_HEIGHT//2-10 - sym2.get_height()//2))
+        if t > 18.2:
+            a6 = int(255 * min(1, (t-18.2)/0.5))
+            txt = self.font_huge.render("FREEFALL", True, (255,215,0))
+            txt.set_alpha(a6)
+            surf.blit(txt, (config.SCREEN_WIDTH//2 - txt.get_width()//2, config.SCREEN_HEIGHT//2+40))
+            sub = self.font_small.render("Bu düşüş burada bitmedi.", True, (180,180,190))
+            sub.set_alpha(a6)
+            surf.blit(sub, (config.SCREEN_WIDTH//2 - sub.get_width()//2, config.SCREEN_HEIGHT//2+90))
+        # skip hint
+        if t < 19.0:
+            hint=self.font_tiny.render("ESC ile geç", True, (120,120,130))
+            hint.set_alpha(int(120 * min(1, t/1.0)))
+            surf.blit(hint, (config.SCREEN_WIDTH//2 - hint.get_width()//2, config.SCREEN_HEIGHT-24))
+        # final buttons after cinematic (handled in update, but draw hint)
+        if t > 19.5:
+            # will be handled as level_complete, but draw hint
+            pass
 
     # ---------- yeni ekranlar: profil / play_select / online / vs ----------
     def draw_profile(self, surf, theme):
@@ -4016,4 +6045,3 @@ class Game:
             if hover: pygame.draw.rect(surf, (255,215,0), b, width=2, border_radius=8)
             t = self.font_med.render(label, True, (255,255,255))
             surf.blit(t, (b.centerx - t.get_width()//2, b.centery - t.get_height()//2))
-

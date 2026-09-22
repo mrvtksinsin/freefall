@@ -12,7 +12,7 @@ PC için `pygame` ile yazılan FREEFALL, **hiçbir grafik/kod kaybı olmadan** A
 - `save_system.py:6` `_get_save_path()` Android özel yol
 - `main.py:24-65` Android fullscreen ölçeklendirme (`game_surf` + `smoothscale` + `offset_x/y`)
 - `main.py:89-130` `FINGER`/`MOUSE` dokunmatik → `handle_event` ölçek dönüşümü, `K_AC_BACK` geri tuşu
-- `buildozer.spec` eklendi (p4a sdl2 bootstrap, `python3,pygame==2.6.1`, `api 33`, `portrait`)
+- `buildozer.spec` eklendi (p4a sdl2 bootstrap, `python3,pygame==2.6.1`, `api 33`, `landscape`)
 
 ## Gereksinimler (PC'de build için - Linux/WSL önerilir)
 ```bash

@@ -1,6 +1,7 @@
 import pygame
 import random
 import math
+import config as _cfg
 
 class Particle:
     def __init__(self, x, y, vx, vy, life, color, size, kind="default"):
@@ -107,8 +108,8 @@ class ParticleSystem:
         self._last_level = None  # bölüm geçişinde temizlik için
 
     def _alloc(self, x, y, vx, vy, life, color, size, kind):
-        # limit check before alloc
-        if len(self.particles) > 220:
+        # limit check before alloc (cap 220)
+        if len(self.particles) >= 220:
             return
         self.particles.append(Particle(x, y, vx, vy, life, color, size, kind))
 
@@ -165,6 +166,28 @@ class ParticleSystem:
             self._alloc(x, y, vx, vy, 0.72, col, 4, "spark")
         self._alloc(x, y, 0, -30, 0.52, (255,215,0), 22, "coin_ring")
 
+    def emit_hit(self, x, y, weapon_id="fist"):
+        # FAZ6: hit feedback - fist dust, sword spark
+        if weapon_id == "beam_sword":
+            for _ in range(7):
+                angle = random.uniform(0, 6.28)
+                speed = random.uniform(60, 180)
+                vx = math.cos(angle)*speed
+                vy = math.sin(angle)*speed - 20
+                col = random.choice([(80,220,255),(255,255,255),(180,240,255)])
+                self._alloc(x, y, vx, vy, random.uniform(0.28,0.48), col, random.randint(2,4), "spark")
+            self._alloc(x, y, 0, 0, 0.32, (80,220,255), 14, "coin_ring")
+        else:
+            for _ in range(5):
+                self._alloc(x+random.randint(-6,6), y, random.uniform(-70,70), random.uniform(-60,-10), 0.32, (200,200,180), 2, "dust")
+            for _ in range(3):
+                angle = random.uniform(-0.6,0.6) - math.pi/2
+                speed = random.uniform(50,110)
+                vx = math.cos(angle)*speed
+                vy = math.sin(angle)*speed
+                self._alloc(x, y, vx, vy, 0.36, (255,220,180), 3, "spark")
+            self._alloc(x, y, 0, 0, 0.28, (255,220,180), 10, "coin_ring")
+
     def emit_wind(self, x, y, n=2):
         for _ in range(n):
             self._alloc(x, y, random.uniform(-30,30), random.uniform(-40,-10), random.uniform(0.45,0.85), (255,255,255), random.randint(2,3), "dust")
@@ -173,7 +196,7 @@ class ParticleSystem:
         for _ in range(n):
             self._alloc(x+random.randint(-20,20), y, random.uniform(-22,22), random.uniform(-10,20), random.uniform(0.6,1.0), (230,244,255), random.randint(2,3), "snow")
 
-    def update(self, dt, cam_y=None, level_name=None):
+    def update(self, dt, cam_y=None, level_name=None, theme=None):
         for p in self.particles:
             p.update(dt)
         alive = [p for p in self.particles if p.life > 0]
@@ -186,10 +209,32 @@ class ParticleSystem:
             if self._last_level is not None:
                 self.atmos_particles.clear()
             self._last_level = level_name
-        # atmosfer — biome-aware, çok hafif, performans dostu
+        # FAZ 4: LEVEL_ATMOSPHERES + tema blend (tema cok dusuk alpha, bolum kimligi korunur)
+        _atm = None
+        _theme_particle = None
+        _blend_ratio = 0.12  # tema etkisi %12, bolum %88
+        try:
+            if level_name is not None:
+                _atm = _cfg.get_level_atmosphere(level_name)
+            if isinstance(theme, dict):
+                tp = theme.get("particle")
+                if isinstance(tp, (list, tuple)) and len(tp) >= 3:
+                    _theme_particle = (int(tp[0]), int(tp[1]), int(tp[2]))
+        except: pass
+        def _blend(base_col, theme_col=_theme_particle, ratio=_blend_ratio):
+            if theme_col is None or not isinstance(base_col, (list,tuple)):
+                return base_col
+            try:
+                # base %88 + theme %12 — bolum kimligi korunur, tema sadece ince tint
+                return (int(base_col[0]*(1-ratio) + theme_col[0]*ratio),
+                        int(base_col[1]*(1-ratio) + theme_col[1]*ratio),
+                        int(base_col[2]*(1-ratio) + theme_col[2]*ratio))
+            except: return base_col
+        # atmosfer — biome-aware, çok hafif, performans dostu (veri tabanli cap/density)
         self._atmos_timer += dt
         if cam_y is not None and self._atmos_timer > 0.07:
             self._atmos_timer = 0
+            # FAZ4: density/cap LEVEL_ATMOSPHERES'ten alinir, renk tema ile hafif blend
             if level_name == "HAVA":
                 if random.random() < 0.55 and len(self.atmos_particles) < 24:
                     self.atmos_particles.append({
@@ -200,7 +245,7 @@ class ParticleSystem:
                         "life": random.uniform(6, 12),
                         "size": random.randint(2,4),
                         "alpha": random.randint(42,110),
-                        "color": (255,255,255),
+                        "color": _blend((255,255,255)),
                         "kind": "dust",
                     })
             elif level_name == "MAGMA":
@@ -213,7 +258,7 @@ class ParticleSystem:
                         "life": random.uniform(4,8),
                         "size": random.randint(2,3),
                         "alpha": random.randint(90,170),
-                        "color": random.choice([(255,84,0),(255,126,32),(255,204,100)]),
+                        "color": _blend(random.choice([(255,84,0),(255,126,32),(255,204,100)])),
                         "kind": "spark",
                     })
             elif level_name == "BUZUL":
@@ -226,7 +271,7 @@ class ParticleSystem:
                         "life": random.uniform(5,10),
                         "size": random.randint(2,3),
                         "alpha": random.randint(84,164),
-                        "color": (226,242,255),
+                        "color": _blend((226,242,255)),
                         "kind": "snow",
                     })
             elif level_name == "KAYA":
@@ -239,7 +284,7 @@ class ParticleSystem:
                         "life": random.uniform(5,9),
                         "size": 2,
                         "alpha": random.randint(30,70),
-                        "color": (160,160,170),
+                        "color": _blend((160,160,170)),
                         "kind": "dust",
                     })
             elif level_name == "TOPRAK":
@@ -252,7 +297,7 @@ class ParticleSystem:
                         "life": random.uniform(5,8),
                         "size": 2,
                         "alpha": random.randint(32,72),
-                        "color": (210,180,140),
+                        "color": _blend((210,180,140)),
                         "kind": "dust",
                     })
             elif level_name == "DERIN":
@@ -265,7 +310,7 @@ class ParticleSystem:
                         "life": random.uniform(6,11),
                         "size": 2,
                         "alpha": random.randint(48,96),
-                        "color": (90,140,255),
+                        "color": _blend((90,140,255)),
                         "kind": "dust",
                     })
             elif level_name == "FINAL":
@@ -278,7 +323,7 @@ class ParticleSystem:
                         "life": random.uniform(6,11),
                         "size": 2,
                         "alpha": random.randint(60,120),
-                        "color": random.choice([(255,215,0),(180,140,255),(255,255,180)]),
+                        "color": _blend(random.choice([(255,215,0),(180,140,255),(255,255,180)])),
                         "kind": "spark",
                     })
             # --- Yeni 14 atmosfer (hafif, düşük cap, okunabilirliği bozmayan) ---
@@ -292,7 +337,7 @@ class ParticleSystem:
                         "life": random.uniform(5,9),
                         "size": 2,
                         "alpha": random.randint(28,60),
-                        "color": (155,140,120),
+                        "color": _blend((155,140,120)),
                         "kind": "dust",
                     })
             elif level_name == "KANALIZASYON":
@@ -305,7 +350,7 @@ class ParticleSystem:
                         "life": random.uniform(4,7),
                         "size": 2,
                         "alpha": random.randint(26,62),
-                        "color": (120,175,85),
+                        "color": _blend((120,175,85)),
                         "kind": "smoke",
                     })
             elif level_name == "CAFE":
@@ -318,7 +363,7 @@ class ParticleSystem:
                         "life": random.uniform(3.5,6),
                         "size": 2,
                         "alpha": random.randint(22,52),
-                        "color": (255,240,210),
+                        "color": _blend((255,240,210)),
                         "kind": "smoke",
                     })
             elif level_name == "BACKROOMS":
@@ -331,7 +376,7 @@ class ParticleSystem:
                         "life": random.uniform(5,8),
                         "size": 2,
                         "alpha": random.randint(24,56),
-                        "color": (255,235,150),
+                        "color": _blend((255,235,150)),
                         "kind": "dust",
                     })
             elif level_name == "GUC SANTRALI":
@@ -344,7 +389,7 @@ class ParticleSystem:
                         "life": random.uniform(3,6),
                         "size": 2,
                         "alpha": random.randint(70,130),
-                        "color": random.choice([(255,220,0),(255,140,30)]),
+                        "color": _blend(random.choice([(255,220,0),(255,140,30)])),
                         "kind": "spark",
                     })
             elif level_name == "SINIF":
@@ -357,7 +402,7 @@ class ParticleSystem:
                         "life": random.uniform(4,7),
                         "size": 1,
                         "alpha": random.randint(20,48),
-                        "color": (245,245,245),
+                        "color": _blend((245,245,245)),
                         "kind": "dust",
                     })
             elif level_name == "FABRIKA":
@@ -370,7 +415,7 @@ class ParticleSystem:
                         "life": random.uniform(4,7),
                         "size": 2,
                         "alpha": random.randint(22,58),
-                        "color": (110,110,115),
+                        "color": _blend((110,110,115)),
                         "kind": "smoke",
                     })
             elif level_name == "POLIGAN":
@@ -383,7 +428,7 @@ class ParticleSystem:
                         "life": random.uniform(5,9),
                         "size": 2,
                         "alpha": random.randint(24,58),
-                        "color": (200,150,235),
+                        "color": _blend((200,150,235)),
                         "kind": "dust",
                     })
             elif level_name == "ORMAN":
@@ -396,7 +441,7 @@ class ParticleSystem:
                         "life": random.uniform(5,9),
                         "size": 2,
                         "alpha": random.randint(26,62),
-                        "color": random.choice([(120,200,80),(90,160,60)]),
+                        "color": _blend(random.choice([(120,200,80),(90,160,60)])),
                         "kind": "dust",
                     })
             elif level_name == "SARAY":
@@ -409,7 +454,7 @@ class ParticleSystem:
                         "life": random.uniform(4,7),
                         "size": 2,
                         "alpha": random.randint(28,66),
-                        "color": (255,215,0),
+                        "color": _blend((255,215,0)),
                         "kind": "spark",
                     })
             elif level_name == "KOY":
@@ -422,7 +467,7 @@ class ParticleSystem:
                         "life": random.uniform(5,9),
                         "size": 2,
                         "alpha": random.randint(22,54),
-                        "color": (195,175,135),
+                        "color": _blend((195,175,135)),
                         "kind": "dust",
                     })
             elif level_name == "SEHIR":
@@ -435,7 +480,7 @@ class ParticleSystem:
                         "life": random.uniform(5,9),
                         "size": 2,
                         "alpha": random.randint(18,46),
-                        "color": (120,175,235),
+                        "color": _blend((120,175,235)),
                         "kind": "smoke",
                     })
             elif level_name == "TOKYO":
@@ -448,7 +493,7 @@ class ParticleSystem:
                         "life": random.uniform(4,7),
                         "size": 2,
                         "alpha": random.randint(50,110),
-                        "color": random.choice([(255,50,150),(50,200,255)]),
+                        "color": _blend(random.choice([(255,50,150),(50,200,255)])),
                         "kind": "spark",
                     })
             elif level_name == "FRANSA":
@@ -461,9 +506,37 @@ class ParticleSystem:
                         "life": random.uniform(5,9),
                         "size": 2,
                         "alpha": random.randint(22,54),
-                        "color": (200,185,210),
+                        "color": _blend((200,185,210)),
                         "kind": "dust",
                     })
+            else:
+                # FAZ4 fallback: OFIS/MUZE ve bilinmeyen seviyeler icin LEVEL_ATMOSPHERES tabanli generic
+                if _atm is not None and level_name is not None:
+                    _dens = _atm.get("particle_density", 0.25)
+                    _cap = _atm.get("particle_cap", 12)
+                    _kind = _atm.get("particle_type", "dust")
+                    if random.random() < _dens and len(self.atmos_particles) < _cap:
+                        _col = _atm.get("glow", (200,200,210))
+                        if isinstance(_col, (list,tuple)) and len(_col) >=3:
+                            _col = (int(_col[0]),int(_col[1]),int(_col[2]))
+                        else:
+                            _col = (200,200,210)
+                        _col = _blend(_col)
+                        # kind'e gore hafif velocity varyasyonu (dusuk maliyet)
+                        if _kind == "spark":
+                            _vx = random.uniform(-12,12); _vy = random.uniform(-22,-8); _life = random.uniform(3.5,6)
+                        elif _kind == "smoke":
+                            _vx = random.uniform(-10,10); _vy = random.uniform(-18,-7); _life = random.uniform(4,7)
+                        elif _kind == "snow":
+                            _vx = random.uniform(-22,22); _vy = random.uniform(30,70); _life = random.uniform(5,10)
+                        else:
+                            _vx = random.uniform(-10,10); _vy = random.uniform(8,18); _life = random.uniform(5,9)
+                        self.atmos_particles.append({
+                            "x": random.randint(30, 870),
+                            "y": cam_y + random.randint(-40, 760),
+                            "vx": _vx, "vy": _vy, "life": _life, "size": 2,
+                            "alpha": random.randint(28,72), "color": _col, "kind": _kind,
+                        })
         for a in self.atmos_particles:
             a["x"] += a["vx"]*dt
             a["y"] += a["vy"]*dt

@@ -11,7 +11,7 @@ version.regex = __version__ = ['"]([^'"]*)['"]
 version.filename = %(source.dir)s/main.py
 
 requirements = python3,pygame==2.6.1
-orientation = portrait
+orientation = landscape
 fullscreen = 0
 # Gerekli izinler (save için gerek yok ama genel)
 android.permissions = INTERNET
@@ -20,8 +20,8 @@ android.minapi = 21
 android.ndk = 25b
 android.sdk = 33
 android.accept_sdk_license_agreements = True
-# portrait + sensor
-android.manifest.orientation = portrait
+# landscape
+android.manifest.orientation = landscape
 # icon / presplash (varsa)
 # icon.filename = %(source.dir)s/icon.png
 # presplash.filename = %(source.dir)s/presplash.png

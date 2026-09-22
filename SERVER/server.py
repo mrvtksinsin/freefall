@@ -248,6 +248,90 @@ def handle_client(conn, addr):
                 resp = {"ok": False, "error": f"Nickname {NICK_MIN}-{NICK_MAX} karakter olmalı"}
                 conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
                 return
+            # Aynı yerel hesap için aynı player_id korunmalı — mevcut nickname varsa aynı ID'yi döndür
+            if is_account:
+                with DB_LOCK:
+                    conn_chk = sqlite3.connect(DB_PATH, check_same_thread=False)
+                    cur_chk = conn_chk.cursor()
+                    cur_chk.execute("SELECT player_id, password_hash, account_type FROM players WHERE nickname=? ORDER BY created_at DESC", (nick,))
+                    row_chk = cur_chk.fetchone()
+                    conn_chk.close()
+                if row_chk:
+                    existing_pid, existing_hash, existing_type = row_chk[0], row_chk[1], row_chk[2]
+                    if existing_type == "account" and existing_hash:
+                        if verify_password(password, existing_hash):
+                            # Aynı hesap — mevcut ID'yi koru, yeni token ver
+                            now = datetime.utcnow().isoformat()
+                            token = make_session_token()
+                            with DB_LOCK:
+                                conn_db = sqlite3.connect(DB_PATH, check_same_thread=False)
+                                conn_db.execute("UPDATE players SET last_seen=?, online=1 WHERE player_id=?", (now, existing_pid))
+                                conn_db.execute("DELETE FROM sessions WHERE player_id=?", (existing_pid,))
+                                conn_db.execute("INSERT INTO sessions (token, player_id, created_at) VALUES (?,?,?)", (token, existing_pid, now))
+                                conn_db.commit()
+                                cur = conn_db.cursor()
+                                cur.execute("SELECT data FROM game_data WHERE player_id=?", (existing_pid,))
+                                gd_row = cur.fetchone()
+                                conn_db.close()
+                            try:
+                                gd_data = json.loads(gd_row[0]) if gd_row else dict(GAME_DATA_DEFAULT)
+                            except:
+                                gd_data = dict(GAME_DATA_DEFAULT)
+                            print(f"[SERVER] REGISTER existing {nick} -> {existing_pid} (same ID)", flush=True)
+                            resp = {"ok": True, "player_id": existing_pid, "nickname": nick, "token": token, "game_data": gd_data}
+                            conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+                            return
+                        else:
+                            resp = {"ok": False, "error": "Bu nickname zaten kayıtlı"}
+                            conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+                            return
+                    elif not existing_hash or existing_type != "account":
+                        # Legacy (şifresiz) hesap -> account'a yükselt, aynı ID korunur
+                        pwd_hash = hash_password(password)
+                        now = datetime.utcnow().isoformat()
+                        token = make_session_token()
+                        with DB_LOCK:
+                            conn_db = sqlite3.connect(DB_PATH, check_same_thread=False)
+                            conn_db.execute("UPDATE players SET password_hash=?, account_type='account', last_seen=?, online=1 WHERE player_id=?", (pwd_hash, now, existing_pid))
+                            conn_db.execute("DELETE FROM sessions WHERE player_id=?", (existing_pid,))
+                            conn_db.execute("INSERT INTO sessions (token, player_id, created_at) VALUES (?,?,?)", (token, existing_pid, now))
+                            # game_data yoksa oluştur
+                            cur = conn_db.cursor()
+                            cur.execute("SELECT data FROM game_data WHERE player_id=?", (existing_pid,))
+                            if not cur.fetchone():
+                                conn_db.execute("INSERT INTO game_data (player_id, data, updated_at) VALUES (?,?,?)", (existing_pid, json.dumps(GAME_DATA_DEFAULT), now))
+                            conn_db.commit()
+                            cur.execute("SELECT data FROM game_data WHERE player_id=?", (existing_pid,))
+                            gd_row = cur.fetchone()
+                            conn_db.close()
+                        try:
+                            gd_data = json.loads(gd_row[0]) if gd_row else dict(GAME_DATA_DEFAULT)
+                        except:
+                            gd_data = dict(GAME_DATA_DEFAULT)
+                        print(f"[SERVER] REGISTER legacy->account {nick} -> {existing_pid} (same ID, upgraded)", flush=True)
+                        resp = {"ok": True, "player_id": existing_pid, "nickname": nick, "token": token, "game_data": gd_data}
+                        conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+                        return
+            # FAZ6-BUGFIX: legacy (register_new) icin ayni nickname zaten varsa ayni ID'yi dondur (same account -> same ID)
+            if not is_account:
+                with DB_LOCK:
+                    conn_chk2 = sqlite3.connect(DB_PATH, check_same_thread=False)
+                    cur2 = conn_chk2.cursor()
+                    cur2.execute("SELECT player_id FROM players WHERE nickname=? ORDER BY created_at DESC", (nick,))
+                    row2 = cur2.fetchone()
+                    conn_chk2.close()
+                if row2:
+                    existing_pid2 = row2[0]
+                    now2 = datetime.utcnow().isoformat()
+                    with DB_LOCK:
+                        conn_db2 = sqlite3.connect(DB_PATH, check_same_thread=False)
+                        conn_db2.execute("UPDATE players SET last_seen=?, online=1 WHERE player_id=?", (now2, existing_pid2))
+                        conn_db2.commit()
+                        conn_db2.close()
+                    print(f"[SERVER] REGISTER existing legacy {nick} -> {existing_pid2} (same ID)", flush=True)
+                    resp = {"ok": True, "player_id": existing_pid2, "nickname": nick}
+                    conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+                    return
             pid = generate_unique_id()
             now = datetime.utcnow().isoformat()
             pwd_hash = hash_password(password) if is_account else ""
@@ -276,6 +360,99 @@ def handle_client(conn, addr):
             if is_account:
                 resp["token"] = token
                 resp["game_data"] = dict(GAME_DATA_DEFAULT)
+            conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+
+        elif t == "account_register":
+            nick = str(msg.get("nickname", "")).strip()
+            password = str(msg.get("password", "") or "")
+            password2 = str(msg.get("password2", "") or password)
+            if not is_valid_nick(nick):
+                resp = {"ok": False, "error": f"Nickname {NICK_MIN}-{NICK_MAX} karakter olmalı"}
+                conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+                return
+            if len(password) < 3 or len(password) > 32:
+                resp = {"ok": False, "error": "Şifre 3-32 karakter olmalı"}
+                conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+                return
+            if password != password2:
+                resp = {"ok": False, "error": "Şifreler eşleşmiyor"}
+                conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+                return
+            # Aynı hesap için aynı ID korunmalı — legacy dahil
+            with DB_LOCK:
+                conn_chk = sqlite3.connect(DB_PATH, check_same_thread=False)
+                cur_chk = conn_chk.cursor()
+                cur_chk.execute("SELECT player_id, password_hash, account_type FROM players WHERE nickname=? ORDER BY created_at DESC", (nick,))
+                row_chk = cur_chk.fetchone()
+                conn_chk.close()
+            if row_chk:
+                existing_pid, existing_hash, existing_type = row_chk[0], row_chk[1], row_chk[2]
+                if existing_hash and existing_type == "account":
+                    if verify_password(password, existing_hash):
+                        now = datetime.utcnow().isoformat()
+                        token = make_session_token()
+                        with DB_LOCK:
+                            conn_db = sqlite3.connect(DB_PATH, check_same_thread=False)
+                            conn_db.execute("UPDATE players SET last_seen=?, online=1 WHERE player_id=?", (now, existing_pid))
+                            conn_db.execute("DELETE FROM sessions WHERE player_id=?", (existing_pid,))
+                            conn_db.execute("INSERT INTO sessions (token, player_id, created_at) VALUES (?,?,?)", (token, existing_pid, now))
+                            conn_db.commit()
+                            cur = conn_db.cursor()
+                            cur.execute("SELECT data FROM game_data WHERE player_id=?", (existing_pid,))
+                            gd_row = cur.fetchone()
+                            conn_db.close()
+                        try:
+                            gd_data = json.loads(gd_row[0]) if gd_row else dict(GAME_DATA_DEFAULT)
+                        except:
+                            gd_data = dict(GAME_DATA_DEFAULT)
+                        print(f"[SERVER] ACCOUNT_REGISTER existing {nick} -> {existing_pid} (same ID)", flush=True)
+                        resp = {"ok": True, "player_id": existing_pid, "nickname": nick, "token": token, "game_data": gd_data}
+                        conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+                        return
+                    else:
+                        resp = {"ok": False, "error": "Bu nickname zaten kayıtlı"}
+                        conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+                        return
+                elif not existing_hash or existing_type != "account":
+                    # Legacy -> account yükselt, aynı ID korunur
+                    pwd_hash = hash_password(password)
+                    now = datetime.utcnow().isoformat()
+                    token = make_session_token()
+                    with DB_LOCK:
+                        conn_db = sqlite3.connect(DB_PATH, check_same_thread=False)
+                        conn_db.execute("UPDATE players SET password_hash=?, account_type='account', last_seen=?, online=1 WHERE player_id=?", (pwd_hash, now, existing_pid))
+                        conn_db.execute("DELETE FROM sessions WHERE player_id=?", (existing_pid,))
+                        conn_db.execute("INSERT INTO sessions (token, player_id, created_at) VALUES (?,?,?)", (token, existing_pid, now))
+                        cur = conn_db.cursor()
+                        cur.execute("SELECT data FROM game_data WHERE player_id=?", (existing_pid,))
+                        if not cur.fetchone():
+                            conn_db.execute("INSERT INTO game_data (player_id, data, updated_at) VALUES (?,?,?)", (existing_pid, json.dumps(GAME_DATA_DEFAULT), now))
+                        conn_db.commit()
+                        cur.execute("SELECT data FROM game_data WHERE player_id=?", (existing_pid,))
+                        gd_row = cur.fetchone()
+                        conn_db.close()
+                    try:
+                        gd_data = json.loads(gd_row[0]) if gd_row else dict(GAME_DATA_DEFAULT)
+                    except:
+                        gd_data = dict(GAME_DATA_DEFAULT)
+                    print(f"[SERVER] ACCOUNT_REGISTER legacy->account {nick} -> {existing_pid} (same ID, upgraded)", flush=True)
+                    resp = {"ok": True, "player_id": existing_pid, "nickname": nick, "token": token, "game_data": gd_data}
+                    conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+                    return
+            # Yeni hesap
+            pid = generate_unique_id()
+            now = datetime.utcnow().isoformat()
+            pwd_hash = hash_password(password)
+            with DB_LOCK:
+                conn_db = sqlite3.connect(DB_PATH, check_same_thread=False)
+                conn_db.execute("INSERT INTO players (player_id, nickname, created_at, last_seen, online, password_hash, account_type) VALUES (?,?,?,?,1,?,?)", (pid, nick, now, now, pwd_hash, "account"))
+                conn_db.execute("INSERT OR REPLACE INTO game_data (player_id, data, updated_at) VALUES (?,?,?)", (pid, json.dumps(GAME_DATA_DEFAULT), now))
+                token = make_session_token()
+                conn_db.execute("INSERT INTO sessions (token, player_id, created_at) VALUES (?,?,?)", (token, pid, now))
+                conn_db.commit()
+                conn_db.close()
+            print(f"[SERVER] ACCOUNT_REGISTER new {nick} -> {pid}", flush=True)
+            resp = {"ok": True, "player_id": pid, "nickname": nick, "token": token, "game_data": dict(GAME_DATA_DEFAULT)}
             conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
 
         elif t == "login":

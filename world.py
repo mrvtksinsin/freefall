@@ -186,7 +186,7 @@ class World:
             if not c.collected: c.update(dt)
 
     # ---------- DRAW — PROFESYONEL GÖRSEL PIPELINE (parallax 3 katman, lighting, bevel) ----------
-    def draw(self, surf, cam_y, level_info):
+    def draw(self, surf, cam_y, level_info, theme=None):
         lvl=level_info["name"]
         # 1) ARKA PLAN — biome-specific gradient + atmospheric perspective + light beams
         if lvl=="HAVA":
@@ -287,6 +287,16 @@ class World:
         else:
             surf.fill(level_info["bg"])
 
+        # FAZ9: per-level subtle ambient (theme uyumlu, low alpha, cache-friendly)
+        try:
+            _atm9 = config.get_level_atmosphere(lvl)
+            _glow9 = _atm9.get("glow", (255,255,255))
+            _amb9 = float(_atm9.get("ambient_strength", 0.12))
+            _a9 = int(8 + _amb9*28)  # 8-18
+            if lvl not in ("FINAL","MAGMA","DERIN"):
+                gfx.draw_glow(surf, (config.SCREEN_WIDTH//2, config.SCREEN_HEIGHT//2), 160, _glow9, _a9)
+        except: pass
+
         # 2) DERİNLİK ÇİZGİLERİ — faint horizon lines, parallax hissi
         start=int(cam_y//260)
         for i in range(-1, config.SCREEN_HEIGHT//260+2):
@@ -299,6 +309,23 @@ class World:
 
         # 3) DUVARLAR — bevel + grain + iç gölge
         self._draw_walls(surf, cam_y, level_info)
+        # FAZ11: hidden repeating symbol (◊) on wall for lore levels
+        try:
+            _sym_levels = {"HAVA","MAGMA","DERIN","KATMAN KAYASI","BACKROOMS","GUC SANTRALI","FABRIKA","SARAY","TOKYO","FINAL"}
+            if lvl in _sym_levels:
+                _sy = int((cam_y*0.5) % 260)
+                # left wall symbol, faint
+                _sym_y = 80 - _sy
+                if 0 <= _sym_y <= config.SCREEN_HEIGHT-20:
+                    _font = pygame.font.SysFont("Arial", 14)
+                    _txt = _font.render("◊", True, (255,255,255))
+                    _txt.set_alpha(28 if lvl!="FINAL" else 55)
+                    surf.blit(_txt, (8, _sym_y))
+                    # right wall mirrored
+                    _txt2 = _font.render("◊", True, (255,255,255))
+                    _txt2.set_alpha(28 if lvl!="FINAL" else 55)
+                    surf.blit(_txt2, (config.SCREEN_WIDTH-18, _sym_y))
+        except: pass
 
         # 4) DEKOR — culling ile
         for d in self.decor:
@@ -360,6 +387,29 @@ class World:
                 pygame.draw.line(fog, (255,255,255,a), (0,i), (config.SCREEN_WIDTH,i))
             # very subtle
             surf.blit(fog, (0, config.SCREEN_HEIGHT-90))
+
+        # FAZ4: tema + bolum blend - cok hafif overlay, bolum kimligi korunur
+        if theme is not None:
+            try:
+                _atm2 = config.get_level_atmosphere(lvl)
+                _tglow = theme.get("glow", (255,215,0,60))
+                if isinstance(_tglow, (list,tuple)) and len(_tglow) >= 3:
+                    _tcol = (int(_tglow[0]), int(_tglow[1]), int(_tglow[2]))
+                    _talpha = int(_tglow[3]) if len(_tglow)==4 else 60
+                else:
+                    _tcol = (255,215,0); _talpha = 60
+                _base_a = int(min(12, max(4, _talpha * 0.18 + _atm2.get("ambient_strength",0.12)*12)))
+                if lvl in ("MAGMA","BUZUL","TOKYO","BACKROOMS"):
+                    _base_a = min(_base_a, 7)
+                if lvl in ("OFIS","MUZE","FRANSA","HAVA"):
+                    _base_a = max(3, _base_a-2)
+                gfx.draw_glow(surf, (config.SCREEN_WIDTH//2, 120), 90, _tcol, _base_a)
+                gfx.draw_glow(surf, (config.SCREEN_WIDTH//2, config.SCREEN_HEIGHT-80), 70, _tcol, max(2,_base_a-2))
+                if _base_a >= 6:
+                    _tint = pygame.Surface((config.SCREEN_WIDTH, 3), pygame.SRCALPHA)
+                    _tint.fill((*_tcol, min(22, _base_a*2)))
+                    surf.blit(_tint, (0, 0))
+            except: pass
 
     def _draw_parallax_hava(self, surf, cam_y):
         # LAYER 1: uzak dağ silüetleri (0.07x) — atmospheric perspective, 3 tone

@@ -153,16 +153,145 @@ SHOP_ITEMS = {
     ],
 }
 
-# Temalar - 10 tema (max)
+# Temalar - 18 tema (genişletildi, uyumlu paletler, mor ana renk yok)
 THEMES = [
-    {"id": "beyaz",       "name": "BEYAZ",        "bg": (245,245,245), "ui_bg": (255,255,255), "ui_text": (30,30,30),   "button": (220,220,220), "button_hover": (200,200,200), "hud": (30,30,30)},
-    {"id": "siyah",       "name": "SIYAH",        "bg": (18,18,18),   "ui_bg": (35,35,35),   "ui_text": (240,240,240), "button": (60,60,60),   "button_hover": (80,80,80),   "hud": (240,240,240)},
-    {"id": "sari_kirmizi", "name": "SARI-KIRMIZI", "bg": (255,240,180), "ui_bg": (255,220,100), "ui_text": (120,20,20),  "button": (255,80,80),   "button_hover": (255,60,60),   "hud": (120,20,20)},
-    {"id": "kirmizi_siyah","name":"KIRMIZI-SIYAH", "bg": (60,10,10),   "ui_bg": (30,10,10),   "ui_text": (255,200,200), "button": (180,30,30),   "button_hover": (200,40,40),   "hud": (255,220,220)},
-    {"id": "siyah_mavi",  "name": "SIYAH-MAVI",   "bg": (10,20,40),    "ui_bg": (20,35,70),   "ui_text": (180,220,255), "button": (30,80,150),   "button_hover": (40,100,180),  "hud": (180,220,255)},
-    {"id": "mor_mavi",    "name": "MOR-MAVI",     "bg": (40,20,60),    "ui_bg": (60,30,90),   "ui_text": (220,200,255), "button": (120,60,180),  "button_hover": (140,80,200),  "hud": (220,200,255)},
-    {"id": "pembe_sari",  "name": "PEMBE-SARI",   "bg": (255,210,230), "ui_bg": (255,230,160), "ui_text": (120,30,80),  "button": (255,150,200), "button_hover": (255,130,180), "hud": (120,30,80)},
-    {"id": "yesil_gri",   "name": "YESIL-GRI",    "bg": (200,220,200), "ui_bg": (180,200,180), "ui_text": (30,60,30),   "button": (100,150,100), "button_hover": (80,130,80),   "hud": (30,60,30)},
-    {"id": "turuncu_siyah","name":"TURUNCU-SIYAH","bg": (32,18,8),    "ui_bg": (58,32,14),    "ui_text": (255,200,120), "button": (220,110,30),  "button_hover": (240,130,40),  "hud": (255,220,160)},
-    {"id": "kahve_krem",  "name": "KAHVE-KREM",   "bg": (242,228,210), "ui_bg": (255,242,220), "ui_text": (90,50,20),    "button": (180,130,90),  "button_hover": (200,150,110), "hud": (90,50,20)},
+    {"id": "beyaz",       "name": "BEYAZ",        "bg": (245,245,245), "ui_bg": (255,255,255), "ui_text": (30,30,30),   "button": (220,220,220), "button_hover": (200,200,200), "hud": (30,30,30),   "accent": (255,215,0), "coin": (255,215,0), "danger": (200,40,40), "success": (40,160,80), "border": (200,200,200), "glow": (255,215,0, 60), "particle": (200,200,210)},
+    {"id": "siyah",       "name": "SIYAH",        "bg": (18,18,18),   "ui_bg": (35,35,35),   "ui_text": (240,240,240), "button": (60,60,60),   "button_hover": (80,80,80),   "hud": (240,240,240), "accent": (255,215,0), "coin": (255,215,0), "danger": (220,50,50), "success": (80,200,120), "border": (60,60,60), "glow": (255,215,0, 40), "particle": (80,80,90)},
+    {"id": "sari_kirmizi", "name": "SARI-KIRMIZI", "bg": (255,240,180), "ui_bg": (255,220,100), "ui_text": (120,20,20),  "button": (255,80,80),   "button_hover": (255,60,60),   "hud": (120,20,20),  "accent": (255,80,80), "coin": (255,215,0), "danger": (180,30,30), "success": (40,160,80), "border": (220,180,100), "glow": (255,80,80, 50), "particle": (255,200,100)},
+    {"id": "kirmizi_siyah","name":"KIRMIZI-SIYAH", "bg": (60,10,10),   "ui_bg": (30,10,10),   "ui_text": (255,200,200), "button": (180,30,30),   "button_hover": (200,40,40),   "hud": (255,220,220), "accent": (255,60,60), "coin": (255,215,0), "danger": (220,40,40), "success": (80,200,120), "border": (80,20,20), "glow": (180,30,30, 60), "particle": (180,60,60)},
+    {"id": "siyah_mavi",  "name": "SIYAH-MAVI",   "bg": (10,20,40),    "ui_bg": (20,35,70),   "ui_text": (180,220,255), "button": (30,80,150),   "button_hover": (40,100,180),  "hud": (180,220,255), "accent": (80,160,255), "coin": (255,215,0), "danger": (200,60,60), "success": (80,200,120), "border": (30,50,90), "glow": (80,160,255, 50), "particle": (80,140,200)},
+    {"id": "mor_mavi",    "name": "MOR-MAVI",     "bg": (40,20,60),    "ui_bg": (60,30,90),   "ui_text": (220,200,255), "button": (120,60,180),  "button_hover": (140,80,200),  "hud": (220,200,255), "accent": (180,120,255), "coin": (255,215,0), "danger": (200,50,80), "success": (80,200,160), "border": (80,50,120), "glow": (120,60,180, 50), "particle": (160,120,220)},
+    {"id": "pembe_sari",  "name": "PEMBE-SARI",   "bg": (255,210,230), "ui_bg": (255,230,160), "ui_text": (120,30,80),  "button": (255,150,200), "button_hover": (255,130,180), "hud": (120,30,80),  "accent": (255,100,180), "coin": (255,215,0), "danger": (200,40,80), "success": (80,180,120), "border": (255,200,220), "glow": (255,150,200, 50), "particle": (255,180,220)},
+    {"id": "yesil_gri",   "name": "YESIL-GRI",    "bg": (200,220,200), "ui_bg": (180,200,180), "ui_text": (30,60,30),   "button": (100,150,100), "button_hover": (80,130,80),   "hud": (30,60,30),   "accent": (80,160,80), "coin": (255,215,0), "danger": (160,50,50), "success": (40,160,80), "border": (150,180,150), "glow": (80,160,80, 50), "particle": (120,180,120)},
+    {"id": "turuncu_siyah","name":"TURUNCU-SIYAH","bg": (32,18,8),    "ui_bg": (58,32,14),    "ui_text": (255,200,120), "button": (220,110,30),  "button_hover": (240,130,40),  "hud": (255,220,160), "accent": (255,140,40), "coin": (255,215,0), "danger": (200,60,40), "success": (80,180,80), "border": (80,40,20), "glow": (220,110,30, 60), "particle": (255,160,80)},
+    {"id": "kahve_krem",  "name": "KAHVE-KREM",   "bg": (242,228,210), "ui_bg": (255,242,220), "ui_text": (90,50,20),    "button": (180,130,90),  "button_hover": (200,150,110), "hud": (90,50,20),    "accent": (180,130,90), "coin": (200,160,50), "danger": (160,40,40), "success": (80,160,80), "border": (210,190,170), "glow": (180,130,90, 50), "particle": (200,180,150)},
+    {"id": "crimson",     "name": "CRIMSON",      "bg": (28,8,12),    "ui_bg": (48,16,22),    "ui_text": (255,210,210), "button": (160,30,45),   "button_hover": (185,45,60),   "hud": (255,180,180), "accent": (220,50,70), "coin": (255,215,0), "danger": (200,30,30), "success": (80,200,120), "border": (80,20,30), "glow": (160,30,45, 60), "particle": (200,60,80)},
+    {"id": "ice",         "name": "ICE",          "bg": (210,235,255), "ui_bg": (235,245,255), "ui_text": (20,40,70),   "button": (120,180,220), "button_hover": (140,200,235), "hud": (20,50,90),    "accent": (80,160,220), "coin": (255,215,0), "danger": (180,50,50), "success": (40,160,100), "border": (180,210,235), "glow": (120,180,220, 50), "particle": (180,220,255)},
+    {"id": "forest",      "name": "FOREST",       "bg": (22,38,28),   "ui_bg": (38,58,42),   "ui_text": (190,230,190), "button": (60,110,70),   "button_hover": (80,135,90),   "hud": (170,220,170), "accent": (80,160,80), "coin": (255,215,0), "danger": (160,40,40), "success": (40,160,80), "border": (50,80,60), "glow": (60,110,70, 60), "particle": (80,160,100)},
+    {"id": "desert",      "name": "DESERT",       "bg": (232,210,170), "ui_bg": (245,225,185), "ui_text": (90,60,30),   "button": (200,160,110), "button_hover": (215,175,125), "hud": (90,60,30),    "accent": (200,160,110), "coin": (255,215,0), "danger": (160,50,40), "success": (80,160,80), "border": (210,190,160), "glow": (200,160,110, 50), "particle": (220,190,150)},
+    {"id": "ocean",       "name": "OCEAN",        "bg": (12,32,58),   "ui_bg": (22,48,82),   "ui_text": (170,210,245), "button": (30,90,140),   "button_hover": (45,110,165),  "hud": (150,200,235), "accent": (80,160,220), "coin": (255,215,0), "danger": (200,60,60), "success": (80,200,120), "border": (30,60,100), "glow": (30,90,140, 60), "particle": (60,140,200)},
+    {"id": "neon_cyan",   "name": "NEON CYAN",    "bg": (8,22,26),    "ui_bg": (16,42,48),   "ui_text": (180,255,245), "button": (0,180,170),    "button_hover": (20,200,190),  "hud": (140,255,240), "accent": (0,220,200), "coin": (255,215,0), "danger": (220,40,80), "success": (80,220,160), "border": (20,60,70), "glow": (0,180,170, 60), "particle": (0,220,200)},
+    {"id": "golden",      "name": "GOLDEN",       "bg": (28,22,8),    "ui_bg": (48,38,18),   "ui_text": (255,230,160), "button": (180,140,40),   "button_hover": (205,165,55),  "hud": (255,215,100), "accent": (255,215,0), "coin": (255,215,0), "danger": (180,50,40), "success": (80,180,80), "border": (80,60,30), "glow": (180,140,40, 60), "particle": (255,215,100)},
+    {"id": "blood_moon",  "name": "BLOOD MOON",   "bg": (32,8,8),     "ui_bg": (52,14,14),   "ui_text": (255,200,180), "button": (140,30,20),   "button_hover": (165,45,30),   "hud": (255,180,160), "accent": (220,60,40), "coin": (255,215,0), "danger": (200,30,30), "success": (80,160,80), "border": (80,20,20), "glow": (140,30,20, 60), "particle": (220,80,60)},
+    {"id": "sunset_orange","name": "SUNSET ORANGE","bg": (42,22,12),  "ui_bg": (66,34,20),   "ui_text": (255,225,190), "button": (220,110,40),  "button_hover": (240,130,55),  "hud": (255,215,160), "accent": (255,140,50), "coin": (255,215,0), "danger": (190,50,30), "success": (80,180,90), "border": (90,45,25), "glow": (220,110,40, 60), "particle": (255,170,90)},
+    {"id": "rose_white",  "name": "ROSE WHITE",   "bg": (250,240,242), "ui_bg": (255,250,252), "ui_text": (120,40,60),  "button": (235,180,190), "button_hover": (245,200,210), "hud": (120,40,60),  "accent": (220,90,120), "coin": (220,170,50), "danger": (170,40,60), "success": (60,160,100), "border": (225,195,205), "glow": (220,90,120, 45), "particle": (240,180,195)},
+    {"id": "industrial_gray","name": "INDUSTRIAL GRAY","bg": (38,40,44), "ui_bg": (58,60,66), "ui_text": (225,228,232), "button": (95,100,108), "button_hover": (115,120,128), "hud": (210,215,220), "accent": (255,200,60), "coin": (255,215,0), "danger": (200,60,60), "success": (80,190,110), "border": (70,72,78), "glow": (150,155,165, 45), "particle": (140,145,155)},
+    {"id": "coffee_cream","name": "COFFEE CREAM", "bg": (48,34,24),   "ui_bg": (72,52,36),   "ui_text": (245,230,200), "button": (150,105,70),  "button_hover": (170,125,85),  "hud": (240,220,180), "accent": (220,170,110), "coin": (255,215,0), "danger": (180,60,50), "success": (90,180,110), "border": (90,65,45), "glow": (150,105,70, 55), "particle": (210,180,140)},
+    {"id": "arctic_night","name": "ARCTIC NIGHT", "bg": (8,16,32),    "ui_bg": (16,28,54),   "ui_text": (190,220,245), "button": (40,70,110),   "button_hover": (55,90,135),   "hud": (170,205,235), "accent": (120,190,255), "coin": (255,215,0), "danger": (200,70,70), "success": (80,200,150), "border": (25,45,80), "glow": (60,110,180, 55), "particle": (120,180,235)},
+    {"id": "toxic_green","name": "TOXIC GREEN",  "bg": (14,28,12),   "ui_bg": (26,48,22),   "ui_text": (200,255,190), "button": (70,160,50),   "button_hover": (90,185,65),   "hud": (180,240,170), "accent": (140,255,100), "coin": (255,235,50), "danger": (200,60,40), "success": (60,200,80), "border": (40,70,35), "glow": (70,160,50, 60), "particle": (140,230,100)},
+    {"id": "steel_blue", "name": "STEEL BLUE",   "bg": (32,40,52),   "ui_bg": (50,62,80),   "ui_text": (215,225,235), "button": (90,110,135),  "button_hover": (110,130,155), "hud": (200,215,230), "accent": (140,180,220), "coin": (255,215,0), "danger": (190,60,60), "success": (80,190,120), "border": (65,75,90), "glow": (90,110,135, 50), "particle": (150,175,200)},
+    {"id": "retro_arcade","name": "RETRO ARCADE", "bg": (12,10,24),   "ui_bg": (24,20,48),   "ui_text": (255,240,180), "button": (220,60,120),  "button_hover": (240,80,140),  "hud": (255,220,120), "accent": (0,230,200), "coin": (255,235,0), "danger": (230,40,80), "success": (60,230,140), "border": (50,40,90), "glow": (220,60,120, 55), "particle": (0,230,200)},
+    {"id": "monochrome", "name": "MONOCHROME",   "bg": (32,32,32),   "ui_bg": (55,55,55),   "ui_text": (240,240,240), "button": (120,120,120), "button_hover": (150,150,150), "hud": (230,230,230), "accent": (240,240,240), "coin": (230,230,230), "danger": (120,120,120), "success": (200,200,200), "border": (80,80,80), "glow": (200,200,200, 40), "particle": (180,180,180)},
+    {"id": "royal_gold", "name": "ROYAL GOLD",   "bg": (20,16,8),    "ui_bg": (38,30,14),   "ui_text": (250,235,190), "button": (170,130,50),   "button_hover": (195,155,65),  "hud": (245,225,160), "accent": (255,215,0), "coin": (255,225,80), "danger": (190,60,40), "success": (90,190,110), "border": (70,55,25), "glow": (200,165,60, 60), "particle": (250,215,120)},
 ]
+
+# --- FAZ 4: Bolum Atmosfer Kimligi (veri tabanli, tema'dan bagimsiz) ---
+# Her bolum icin: background_tint/secondary_tint/glow/particle_type/particle_density/ambient_strength/music_key
+# world.py ve particles.py mevcut sistemi koruyarak bu veriyi referans alir.
+# Tema overlay'i ayri katmanda cok dusuk alpha ile blend edilir - bolum kimligi korunur.
+LEVEL_ATMOSPHERES = {
+    "HAVA":           {"background_tint": (135,206,250), "secondary_tint": (210,235,255), "glow": (255,255,220), "particle_type": "dust",  "particle_density": 0.55, "particle_cap": 24, "ambient_strength": 0.10, "vignette": 0.10, "music_key": "ambient_air"},
+    "TOPRAK":         {"background_tint": (139, 90, 43),  "secondary_tint": ( 68, 44, 20), "glow": (255,220,160), "particle_type": "dust",  "particle_density": 0.38, "particle_cap": 16, "ambient_strength": 0.08, "vignette": 0.14, "music_key": "earthy"},
+    "KAYA":           {"background_tint": (100,100,110),  "secondary_tint": ( 28, 28, 34), "glow": (180,180,190), "particle_type": "dust",  "particle_density": 0.32, "particle_cap": 14, "ambient_strength": 0.18, "vignette": 0.18, "music_key": "dark_rock"},
+    "MAGMA":          {"background_tint": ( 40, 10, 10),  "secondary_tint": ( 18,  6,  8), "glow": (255, 70, 20), "particle_type": "spark", "particle_density": 0.46, "particle_cap": 20, "ambient_strength": 0.22, "vignette": 0.20, "music_key": "magma"},
+    "BUZUL":          {"background_tint": (200,230,255),  "secondary_tint": (172,202,232), "glow": (200,230,255), "particle_type": "snow",  "particle_density": 0.62, "particle_cap": 28, "ambient_strength": 0.12, "vignette": 0.12, "music_key": "ice"},
+    "DERIN":          {"background_tint": ( 10, 20, 40),  "secondary_tint": (  6, 10, 22), "glow": ( 80,140,255), "particle_type": "dust",  "particle_density": 0.36, "particle_cap": 18, "ambient_strength": 0.28, "vignette": 0.28, "music_key": "deep"},
+    "KATMAN KAYASI":  {"background_tint": ( 68, 58, 52),  "secondary_tint": ( 52, 44, 40), "glow": (160,140,120), "particle_type": "dust",  "particle_density": 0.30, "particle_cap": 12, "ambient_strength": 0.12, "vignette": 0.16, "music_key": "strata"},
+    "KANALIZASYON":   {"background_tint": ( 46, 58, 42),  "secondary_tint": ( 36, 48, 34), "glow": (120,180, 80), "particle_type": "smoke", "particle_density": 0.28, "particle_cap": 12, "ambient_strength": 0.14, "vignette": 0.18, "music_key": "sewer"},
+    "CAFE":           {"background_tint": (214,184,142),  "secondary_tint": (196,164,122), "glow": (255,200,140), "particle_type": "smoke", "particle_density": 0.26, "particle_cap": 10, "ambient_strength": 0.10, "vignette": 0.10, "music_key": "cafe"},
+    "OFIS":           {"background_tint": (222,226,232),  "secondary_tint": (210,216,224), "glow": (200,220,255), "particle_type": "dust",  "particle_density": 0.20, "particle_cap": 10, "ambient_strength": 0.08, "vignette": 0.10, "music_key": "office"},
+    "BACKROOMS":      {"background_tint": (205,180,120),  "secondary_tint": (188,164,108), "glow": (255,240,160), "particle_type": "dust",  "particle_density": 0.30, "particle_cap": 12, "ambient_strength": 0.14, "vignette": 0.16, "music_key": "backrooms"},
+    "GUC SANTRALI":   {"background_tint": ( 70, 72, 78),  "secondary_tint": ( 58, 60, 66), "glow": (255,220,  0), "particle_type": "spark", "particle_density": 0.22, "particle_cap": 10, "ambient_strength": 0.16, "vignette": 0.18, "music_key": "power"},
+    "MUZE":           {"background_tint": (232,226,212),  "secondary_tint": (216,210,196), "glow": (255,230,160), "particle_type": "spark", "particle_density": 0.18, "particle_cap": 10, "ambient_strength": 0.10, "vignette": 0.12, "music_key": "museum"},
+    "SINIF":          {"background_tint": (182,212,182),  "secondary_tint": (158,188,158), "glow": (255,255,220), "particle_type": "dust",  "particle_density": 0.24, "particle_cap": 10, "ambient_strength": 0.08, "vignette": 0.10, "music_key": "classroom"},
+    "FABRIKA":        {"background_tint": ( 52, 52, 56),  "secondary_tint": ( 42, 42, 46), "glow": (255,100, 40), "particle_type": "smoke", "particle_density": 0.26, "particle_cap": 12, "ambient_strength": 0.16, "vignette": 0.18, "music_key": "factory"},
+    "POLIGAN":        {"background_tint": ( 82, 62,122),  "secondary_tint": ( 68, 48,108), "glow": (255, 80,180), "particle_type": "dust",  "particle_density": 0.28, "particle_cap": 12, "ambient_strength": 0.12, "vignette": 0.14, "music_key": "polygon"},
+    "ORMAN":          {"background_tint": ( 32, 72, 42),  "secondary_tint": ( 28, 60, 38), "glow": (120,200, 80), "particle_type": "dust",  "particle_density": 0.30, "particle_cap": 12, "ambient_strength": 0.12, "vignette": 0.14, "music_key": "forest"},
+    "SARAY":          {"background_tint": (222,202,162),  "secondary_tint": (208,188,148), "glow": (255,215,  0), "particle_type": "spark", "particle_density": 0.24, "particle_cap": 10, "ambient_strength": 0.12, "vignette": 0.14, "music_key": "palace"},
+    "KOY":            {"background_tint": (152,182,122),  "secondary_tint": (132,162,102), "glow": (255,200,100), "particle_type": "dust",  "particle_density": 0.28, "particle_cap": 12, "ambient_strength": 0.10, "vignette": 0.10, "music_key": "village"},
+    "SEHIR":          {"background_tint": ( 72, 82, 98),  "secondary_tint": ( 60, 68, 84), "glow": (100,180,255), "particle_type": "smoke", "particle_density": 0.22, "particle_cap": 10, "ambient_strength": 0.14, "vignette": 0.16, "music_key": "city"},
+    "TOKYO":          {"background_tint": ( 22, 22, 42),  "secondary_tint": ( 18, 18, 32), "glow": (255, 50,150), "particle_type": "spark", "particle_density": 0.24, "particle_cap": 10, "ambient_strength": 0.18, "vignette": 0.20, "music_key": "tokyo"},
+    "FRANSA":         {"background_tint": (182,202,232),  "secondary_tint": (162,182,212), "glow": (255,200,200), "particle_type": "dust",  "particle_density": 0.26, "particle_cap": 12, "ambient_strength": 0.10, "vignette": 0.10, "music_key": "france"},
+    "FINAL":          {"background_tint": ( 12, 12, 28),  "secondary_tint": (  8,  8, 18), "glow": (255,215,  0), "particle_type": "spark", "particle_density": 0.42, "particle_cap": 20, "ambient_strength": 0.32, "vignette": 0.32, "music_key": "final"},
+}
+
+# --- FAZ6: Combat / Silahlar (arcade, moduler) ---
+WEAPONS = {
+    "fist": {
+        "id": "fist", "name": "YUMRUK", "price": 0,
+        "damage": 1, "range": 88, "cooldown": 0.34, "duration": 0.22,
+        "hitbox_w": 28, "hitbox_h": 28, "knockback": 48, "stagger": 0.42,
+        "color": (255, 220, 180), "trail": None, "icon": "F"
+    },
+    "beam_sword": {
+        "id": "beam_sword", "name": "IŞIN KILICI", "price": 150,
+        "damage": 2, "range": 148, "cooldown": 0.62, "duration": 0.33,
+        "hitbox_w": 42, "hitbox_h": 32, "knockback": 72, "stagger": 0.68,
+        "color": (80, 220, 255), "trail": (80, 220, 255), "icon": "S"
+    },
+}
+
+def get_weapon(weapon_id):
+    return WEAPONS.get(weapon_id, WEAPONS["fist"])
+
+# --- FAZ11: Lore / World Building ---
+LEVEL_LORE = {
+    1:  {"title": "HAVA",           "text": "İlk düşüş burada başlar. Aşağıda ne olduğunu henüz bilmiyorsun.", "detail": "◊"},
+    2:  {"title": "TOPRAK",         "text": "Zemin artık daha yakın. Güvenli görünen hiçbir şey gerçekten güvenli değil.", "detail": "Kökler arasında bir işaret var."},
+    3:  {"title": "KAYA",           "text": "Taşlar üst üste. Biri kayarsa hepsi kayar.", "detail": "Duvarlarda çizikler."},
+    4:  {"title": "MAGMA",          "text": "Sıcaklık kemiklerine işliyor. Işık aşağıdan geliyor.", "detail": "◊ yine burada."},
+    5:  {"title": "BUZUL",          "text": "Soğuk nefesini kesiyor. Yukarısı çok uzakta.", "detail": "Buzun altında bir şey var."},
+    6:  {"title": "DERİN",          "text": "Işık yok. Sadece derinliğin sesi var.", "detail": "◊ derinde parlıyor."},
+    7:  {"title": "KATMAN KAYASI",  "text": "Katmanlar yılları sayıyor. Sen sadece bir çizgisin.", "detail": "Taş aynı sembolü taşıyor."},
+    8:  {"title": "KANALİZASYON",   "text": "Su yavaş akıyor. Kokunun ardında bir şey saklanıyor.", "detail": "Borularda fısıltı."},
+    9:  {"title": "KAFE",           "text": "Bir zamanlar burada kahve kokusu vardı. Şimdi sadece toz.", "detail": "Bir fincan hâlâ sıcak."},
+    10: {"title": "OFİS",           "text": "Masalar boş. Ekranlar hâlâ açık.", "detail": "E-postalar hiç gönderilmemiş."},
+    11: {"title": "BACKROOMS",      "text": "Sarı ışık hiç sönmüyor. Zaman yok gibi.", "detail": "◊ tavanda."},
+    12: {"title": "GÜÇ SANTRALİ",   "text": "Kablolar uğulduyor. Enerji hâlâ bir yere gidiyor.", "detail": "◊ panoda yanıyor."},
+    13: {"title": "MÜZE",           "text": "Eserler yerinde. Ziyaretçiler yok.", "detail": "Bir kayıt: 'Aşağı bakma.'"},
+    14: {"title": "SINIF",          "text": "Tahta silinmiş ama bir cümle kalmış: 'Unutma'.", "detail": "Sıralar düzenli."},
+    15: {"title": "FABRİKA",        "text": "Metal gıcırdıyor. Fabrika hâlâ çalışıyor.", "detail": "Makine aynı sembolü damgalıyor."},
+    16: {"title": "POLİGON",        "text": "Hedef tahtaları boş. Atışlar yukarıdan değil, aşağıdan gelmiş.", "detail": "Mermiler erimiş."},
+    17: {"title": "ORMAN",          "text": "Yapraklar düşmüyor, yükseliyor. Garip.", "detail": "Ağaçlar izliyor."},
+    18: {"title": "SARAY",          "text": "Altın solmuş. Taht boş, ama ayak izleri taze.", "detail": "◊ tahtın arkasında."},
+    19: {"title": "KÖY",            "text": "Evler sessiz. Kapılar dışarıdan kilitli.", "detail": "Bir evde ışık yanıyor."},
+    20: {"title": "ŞEHİR",          "text": "Şehir uyumuyor, sadece izliyor.", "detail": "Tabelalar aynı sembolü gösteriyor."},
+    21: {"title": "TOKYO",          "text": "Neonlar yanıp sönüyor. Kalabalık yok, ama gölgeler var.", "detail": "◊ her tabelada."},
+    22: {"title": "FRANSA",         "text": "Işık zarif, ama hava ağır. Son kapı yakın.", "detail": "Son kayıt: 'Buradaydı.'"},
+    23: {"title": "FINAL",          "text": "En alttasın. Monster sustu. Düşüş bitti mi, yoksa yeni mi başlıyor?", "detail": "◊ artık her yerde."},
+}
+
+CHARACTER_LORE = {
+    "cop_adam":    "Sokakları bilir. Düşerken bile etrafını izler.",
+    "soylu":       "Altın solsa da duruşu değişmez.",
+    "madame":      "Zarafeti düşerken bile bozulmaz.",
+    "kadin":       "Sessiz ama kararlı. Adım adım.",
+    "soytari":     "Gülüşü yankılanır, kimse duymaz.",
+    "erkek":       "Sade ve dengeli. Fazla konuşmaz.",
+    "ayi":         "Yavaş görünür, ama asla vazgeçmez.",
+    "noel_baba":   "Hediyeleri bitmiş, ama yolu biliyor.",
+    "tavuk":       "Korkak değil, sadece dikkatli.",
+    "ninja":       "Gölge gibi. Sesi duyulmaz.",
+    "robot":       "Hesaplar, ama düşüşü hesaplayamadı.",
+    "sihirbaz":    "Bir zamanlar numaraları gerçek sanılırdı.",
+    "iskelet":     "Çoktan düşmüş, ama hâlâ düşüyor.",
+    "asker":       "Emir beklemiyor, sadece ilerliyor.",
+    "korsan":      "Hazinesi yok, ama rotası var.",
+    "balon":       "Hafif. Rüzgar nereye isterse.",
+    "gotik_kiz":   "Karanlığı sever, karanlık onu sever.",
+    "gotik_erkek": "Sessiz, gölgelerde rahat.",
+}
+
+MONSTER_LORE = "Onu kimse çağırmadı. Belki de zaten hep buradaydı. Yaklaştığında hava ağırlaşır."
+
+REPEATING_SYMBOL = "◊"
+
+# Hizli erisim helper'lar (world/particles/audio ortak kullanir)
+def get_level_atmosphere(level_name):
+    return LEVEL_ATMOSPHERES.get(level_name, LEVEL_ATMOSPHERES["HAVA"])
+
+def get_music_key(level_name):
+    atm = LEVEL_ATMOSPHERES.get(level_name)
+    if atm:
+        return atm.get("music_key", "ambient_air")
+    return "ambient_air"

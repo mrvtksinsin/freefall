@@ -50,6 +50,9 @@ class Monster:
         self.level_name = "HAVA"
         self.base_speed = MONSTER_BASE_SPEED
         self.caught = False
+        # FAZ6: stagger/knockback
+        self.stagger_timer = 0.0
+        self.hit_flash = 0.0
 
     def reset(self, player_y, level, level_name):
         self.level = level
@@ -58,6 +61,8 @@ class Monster:
         self.x = config.SCREEN_WIDTH//2 - self.w//2
         self.anim = 0
         self.caught = False
+        self.stagger_timer = 0.0
+        self.hit_flash = 0.0
         # seviye bazlı hız
         self.base_speed = MONSTER_BASE_SPEED + (level-1)*MONSTER_SPEED_PER_LEVEL
         # magma, tokyo, final gibi zor seviyelerde ekstra
@@ -69,8 +74,30 @@ class Monster:
     def get_speed(self):
         return self.base_speed
 
+    def apply_hit(self, damage, knockback, stagger):
+        # FAZ6: called from Game when weapon hits monster
+        try:
+            self.stagger_timer = max(getattr(self, 'stagger_timer', 0), float(stagger))
+            self.hit_flash = 0.6
+            self.y -= float(knockback)
+            # keep monster on screen (don't go too far)
+            # clamp: at least 80px behind player max knockback
+            # if monster too far, let it catch up naturally
+        except: pass
+
     def update(self, dt, player, camera_y):
         self.anim += dt * (6 + self.level*0.35)
+        # FAZ6: stagger / hit flash decay
+        if getattr(self, 'stagger_timer', 0) > 0:
+            self.stagger_timer = max(0, self.stagger_timer - dt)
+        if getattr(self, 'hit_flash', 0) > 0:
+            self.hit_flash = max(0, self.hit_flash - dt*4)
+        if getattr(self, 'stagger_timer', 0) > 0:
+            # staggered: still follow X but no Y progress (stunned)
+            target_x = player.x + player.w//2 - self.w//2
+            target_x = max(6, min(config.SCREEN_WIDTH - self.w - 6, target_x))
+            self.x += (target_x - self.x) * MONSTER_FOLLOW_X_LERP * dt * 0.5
+            return
         # Hedef: oyuncunun gerisinde kal, ama yakala
         # Oyuncu hızı yaklaşık vy ~ 400-650, canavar base 210+... oyuncu daha hızlı
         # Ancak oyuncu engelde takılırsa (on_ground ve düşük vx/vy) canavar yaklaşır
@@ -165,6 +192,14 @@ class Monster:
         body_rect = pygame.Rect(sx+6, sy+8+int(bob), self.w-12, self.h-18)
         pygame.draw.rect(surf, body_col, body_rect, border_radius=14)
         pygame.draw.rect(surf, (0,0,0), body_rect, width=2, border_radius=14)
+        # FAZ6: hit flash
+        if getattr(self, 'hit_flash', 0) > 0:
+            try:
+                a = int(100 * self.hit_flash)
+                flash_s = pygame.Surface((body_rect.width, body_rect.height), pygame.SRCALPHA)
+                flash_s.fill((255,255,255, a))
+                surf.blit(flash_s, body_rect.topleft)
+            except: pass
         # üst highlight
         pygame.draw.rect(surf, tuple(min(255,c+32) for c in body_col), pygame.Rect(body_rect.x+4, body_rect.y+4, body_rect.width-8, 5), border_radius=3)
         # gözler — parlayan

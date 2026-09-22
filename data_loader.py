@@ -83,21 +83,29 @@ def apply_data_to_config(config):
         if clean:
             config.CHARACTERS = clean
 
-    # themes
+    # themes (12 alanlı palet korunur, eski 6 alanlı ile uyumlu)
     ths = load_json("themes.json", None)
     if isinstance(ths, list) and ths:
         clean = []
         for t in ths:
             try:
+                _bg = _sanitize_color(t.get("bg"), (245, 245, 245))
                 clean.append({
                     "id": str(t.get("id")),
                     "name": str(t.get("name", t.get("id"))),
-                    "bg": _sanitize_color(t.get("bg"), (245, 245, 245)),
+                    "bg": _bg,
                     "ui_bg": _sanitize_color(t.get("ui_bg"), (255, 255, 255)),
                     "ui_text": _sanitize_color(t.get("ui_text"), (30, 30, 30)),
                     "button": _sanitize_color(t.get("button"), (220, 220, 220)),
                     "button_hover": _sanitize_color(t.get("button_hover"), (200, 200, 200)),
                     "hud": _sanitize_color(t.get("hud"), (30, 30, 30)),
+                    "accent": _sanitize_color(t.get("accent"), _bg),
+                    "coin": _sanitize_color(t.get("coin"), (255, 215, 0)),
+                    "danger": _sanitize_color(t.get("danger"), (200, 40, 40)),
+                    "success": _sanitize_color(t.get("success"), (40, 160, 80)),
+                    "border": _sanitize_color(t.get("border"), (200, 200, 200)),
+                    "glow": _sanitize_color(t.get("glow"), _bg),
+                    "particle": _sanitize_color(t.get("particle"), (200, 200, 210)),
                 })
             except Exception as ex:
                 print(f"[Data] themes sanitize skip: {ex}")

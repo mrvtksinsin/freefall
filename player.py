@@ -59,6 +59,13 @@ class Player:
         self.anim_time = 0.0; self.facing = 1
         self.state = "idle"; self.roll_timer = 0.0
         self.was_on_ground = False; self.squash = 0.0
+        # FAZ6: combat
+        self.attack_timer = 0.0
+        self.attack_cooldown = 0.0
+        self.attack_weapon = "fist"
+        self.attack_id = 0
+        self.attack_phase = "idle"
+        self._attack_hit_done = set()
 
     @property
     def rect(self):
@@ -77,6 +84,8 @@ class Player:
 
     def reset(self, x, y):
         self.x=x; self.y=y; self.vx=0; self.vy=0; self.on_ground=False; self.crush_timer=0; self.alive=True; self.death_anim=0; self.coins=0; self.distance_px=0; self.start_y=y; self.anim_time=0; self.roll_timer=0; self.squash=0; self.state="idle"
+        # FAZ6 combat reset
+        self.attack_timer=0; self.attack_cooldown=0; self.attack_phase="idle"; self._attack_hit_done=set()
 
     def handle_input(self, keys, dt):
         if not self.alive: return
@@ -100,6 +109,48 @@ class Player:
             self.vy=config.JUMP_FORCE; self.on_ground=False; self.squash=-0.25; self.state="jump"; return True
         return False
 
+    # FAZ6 combat
+    def try_attack(self, weapon_id):
+        if not self.alive: return False
+        if self.attack_timer > 0 or self.attack_cooldown > 0: return False
+        w = config.get_weapon(weapon_id)
+        self.attack_weapon = w["id"]
+        self.attack_timer = w["duration"]
+        self.attack_cooldown = 0
+        self.attack_id += 1
+        self.attack_phase = "windup"
+        self._attack_hit_done = set()
+        return True
+
+    def update_combat(self, dt):
+        if self.attack_timer > 0:
+            self.attack_timer = max(0, self.attack_timer - dt)
+            w = config.get_weapon(self.attack_weapon)
+            dur = w["duration"]
+            frac = 1 - (self.attack_timer / dur) if dur>0 else 1
+            if frac < 0.32:
+                self.attack_phase = "windup"
+            elif frac < 0.68:
+                self.attack_phase = "active"
+            else:
+                self.attack_phase = "recovery"
+            if self.attack_timer <= 0:
+                self.attack_phase = "idle"
+                self.attack_cooldown = w["cooldown"]
+                self._attack_hit_done = set()
+        if self.attack_cooldown > 0:
+            self.attack_cooldown = max(0, self.attack_cooldown - dt)
+
+    def get_attack_hitbox(self):
+        if self.attack_timer <= 0 or self.attack_phase != "active":
+            return None
+        w = config.get_weapon(self.attack_weapon)
+        hw = w["hitbox_w"]; hh = w["hitbox_h"]
+        offset_x = w["range"] * self.facing
+        cx = self.x + self.w//2 + offset_x
+        cy = self.y + self.h//2 - 4
+        return pygame.Rect(int(cx - hw//2), int(cy - hh//2), hw, hh)
+
     def _find_support(self, obstacles):
         """Ayak altında destek var mı? Float tolerans ile."""
         foot_y = self.y + self.h
@@ -110,6 +161,9 @@ class Player:
 
     def update_physics(self, dt, obstacles):
         self.anim_time+=dt
+        # FAZ6 combat timers (also called from Game, but keep here for standalone)
+        try: self.update_combat(dt)
+        except: pass
         if self.squash!=0:
             self.squash+=dt*4
             if self.squash>0: self.squash=max(0,self.squash-dt*6)
@@ -249,13 +303,31 @@ class Player:
             arm_swing=math.sin(self.anim_time*13+math.pi)*10
             tilt=math.sin(self.anim_time*13)*0.04*self.facing
         elif self.state=="fall":
-            bob=math.sin(self.anim_time*5)*1.0
-            leg_swing=math.sin(self.anim_time*6)*6
+            # FAZ7: speed-based falling pose (visual only, hitbox degismez)
+            spd = max(0.0, min(1.0, (self.vy - 180)/520)) if self.alive else 0
+            bob=math.sin(self.anim_time*5)*1.0 * (0.55 + spd*0.55)
+            leg_swing=math.sin(self.anim_time*6)*6 * (0.7 + spd*0.35)
+            tilt=self.facing*(0.045 + spd*0.09)
+            stretch=1.0 + spd*0.11
+            arm_swing=math.sin(self.anim_time*6)*3 * (0.6+spd*0.4)
         elif self.state=="roll":
             tilt=self.facing*0.18; stretch=0.88
             leg_swing=math.sin(self.anim_time*18)*18
         elif self.state=="jump":
             stretch=1.08; bob=math.sin(self.anim_time*8)*0.8
+        elif self.state=="death":
+            # FAZ7: death - slight rotation + squash + bob
+            bob=math.sin(self.anim_time*7)*1.2
+            tilt=self.death_anim*0.18 + math.sin(self.anim_time*9)*0.05
+            stretch=1.0 - min(0.12, self.death_anim*0.08)
+            leg_swing=math.sin(self.anim_time*8)*4
+        elif self.state=="idle" and self.alive:
+            # FAZ7: subtle breathing + micro variation
+            var = (hash(cid) % 10) * 0.07
+            bob=math.sin(self.anim_time*(1.85+var))*0.75 + math.sin(self.anim_time*0.9)*0.25
+            tilt=math.sin(self.anim_time*(1.15+var*0.1))*0.016*self.facing
+            arm_swing=math.sin(self.anim_time*1.45)*2.2
+            leg_swing=math.sin(self.anim_time*1.25)*1.5
 
         if squash!=0: stretch+=squash
 
@@ -271,6 +343,25 @@ class Player:
         # hafif glow karakter etrafında (canlıysa)
         if self.alive:
             gfx.draw_glow(surf, (sx+self.w//2, int(by+bh//2+bob)), 26, accent, 18)
+        # hız çizgileri — sadece görsel, fizik/hitbox değişmez
+        try:
+            if self.alive and not self.on_ground and self.vy > 420:
+                n_lines = 2 if self.vy < 550 else 3
+                spd_a = 60 if self.vy < 550 else 90
+                cx = sx + self.w // 2
+                for li in range(n_lines):
+                    lx = cx - 14 + li * 14 + int(math.sin(self.anim_time*9+li)*2)
+                    ly1 = sy - 6 - (li*4)
+                    ly2 = sy - 26 - (li*6)
+                    pygame.draw.line(surf, (255,255,255, spd_a), (lx, ly1), (lx, ly2), 2)
+                if self.vy > 550:
+                    stretch = min(stretch + 0.04, 1.2)
+                    bh=int(self.h*stretch)
+                    bw=int(self.w*(2-stretch))
+                    bx=sx+(self.w-bw)//2
+                    by=sy+(self.h-bh)
+                    body_rect=pygame.Rect(bx, int(by+bob), bw, bh)
+        except: pass
 
         # ÇANTA — vücudun ARKASINDA çizilir (arka taraf, bakış yönünün karşısı)
         bx_off, by_off = offsets["bag"]
@@ -300,14 +391,86 @@ class Player:
         # karakter özel detay: soylu yakası, ninja kuşak vb.
         self._draw_char_costume(surf, body_rect, cid, color, accent, det)
 
-        # KOLLAR - basit procedural
+        # KOLLAR - basit procedural + FAZ6 combat override
         arm_w=6; arm_h=16
-        # sol kol
         l_arm_x = body_rect.x -3 + int(math.sin(self.anim_time*13+0.5)*2 if self.state=="run" else 0)
         r_arm_x = body_rect.right -3 + int(math.sin(self.anim_time*13+math.pi+0.5)*2 if self.state=="run" else 0)
         arm_y = body_rect.y+10 + int(bob*0.5)
-        # kolları çiz (fall'da açık)
-        if self.state in ("fall","jump"):
+        if self.attack_phase != "idle" and self.alive:
+            w = config.get_weapon(self.attack_weapon)
+            is_right = self.facing >= 0
+            front_x = r_arm_x if is_right else l_arm_x
+            back_x = l_arm_x if is_right else r_arm_x
+            front_y = arm_y
+            # FAZ7: body lean during attack (visual only)
+            if self.attack_phase == "windup":
+                tilt = self.facing * -0.06
+            elif self.attack_phase == "active":
+                tilt = self.facing * 0.11
+            else:
+                tilt = self.facing * 0.03
+            # back arm normal
+            pygame.draw.rect(surf, det["secondary"], pygame.Rect(back_x, front_y, arm_w, arm_h-4), border_radius=4)
+            pygame.draw.rect(surf, (0,0,0), pygame.Rect(back_x, front_y, arm_w, arm_h-4), width=1, border_radius=4)
+            if w["id"] == "fist":
+                if self.attack_phase == "windup":
+                    ext = -7
+                elif self.attack_phase == "active":
+                    ext = 18
+                else:
+                    ext = 7
+                fx = front_x + ext * self.facing
+                fy = front_y + 2
+                # slight squash on impact
+                if self.attack_phase == "active":
+                    fx += int(self.facing*2)
+                pygame.draw.rect(surf, det["secondary"], pygame.Rect(fx, fy, arm_w+2, arm_h-4), border_radius=4)
+                pygame.draw.rect(surf, (0,0,0), pygame.Rect(fx, fy, arm_w+2, arm_h-4), width=1, border_radius=4)
+                fx2 = fx + (4*self.facing)
+                pygame.draw.circle(surf, (255,220,180), (fx2+3, fy+7), 6)
+                pygame.draw.circle(surf, (0,0,0), (fx2+3, fy+7), 6, 1)
+                if self.attack_phase == "active":
+                    gfx.draw_glow(surf, (fx2+3, fy+7), 14, (255,220,180), 24)
+                    # FAZ7: hitbox-aligned impact flash
+                    pygame.draw.circle(surf, (255,255,255, 90), (fx2+3+int(self.facing*8), fy+7), 3)
+            else:
+                # beam sword
+                pygame.draw.rect(surf, det["secondary"], pygame.Rect(front_x, front_y, arm_w, arm_h-4), border_radius=4)
+                pygame.draw.rect(surf, (0,0,0), pygame.Rect(front_x, front_y, arm_w, arm_h-4), width=1, border_radius=4)
+                hand_x = front_x + 3
+                hand_y = front_y + 6
+                blade_len = 30
+                if self.attack_phase == "windup":
+                    ang = -45
+                elif self.attack_phase == "active":
+                    ang = 35
+                else:
+                    ang = 5
+                rad = math.radians(ang)
+                tip_x = hand_x + math.cos(rad)*blade_len * self.facing
+                tip_y = hand_y + math.sin(rad)*blade_len
+                pygame.draw.rect(surf, (60,60,70), pygame.Rect(hand_x-2, hand_y-4, 5, 10), border_radius=2)
+                col = w["color"]
+                gfx.draw_glow(surf, (hand_x, hand_y), 16, col, 26)
+                # FAZ7: blade trail cache-friendly (2 lines, no new Surface)
+                if self.attack_phase == "windup":
+                    # windup trail faint
+                    prev_ang = -55
+                    pr = math.radians(prev_ang)
+                    px = hand_x + math.cos(pr)*blade_len*0.7 * self.facing
+                    py = hand_y + math.sin(pr)*blade_len*0.7
+                    pygame.draw.line(surf, (*col, 60), (hand_x, hand_y), (px, py), 3)
+                pygame.draw.line(surf, col, (hand_x, hand_y), (tip_x, tip_y), 7)
+                pygame.draw.line(surf, (255,255,255), (hand_x, hand_y), (tip_x, tip_y), 2)
+                if self.attack_phase == "active":
+                    gfx.draw_glow(surf, (int(tip_x), int(tip_y)), 10, col, 20)
+                    # active trail 2-arc
+                    for da in (-18, -9):
+                        tr = math.radians(ang+da)
+                        tx = hand_x + math.cos(tr)*blade_len*0.85 * self.facing
+                        ty = hand_y + math.sin(tr)*blade_len*0.85
+                        pygame.draw.line(surf, (*col, 38), (hand_x, hand_y), (tx, ty), 2)
+        elif self.state in ("fall","jump"):
             # kollar yana açık
             pygame.draw.rect(surf, det["secondary"], pygame.Rect(l_arm_x-6, arm_y+2, arm_w+2, 10), border_radius=4)
             pygame.draw.rect(surf, det["secondary"], pygame.Rect(r_arm_x+2, arm_y+2, arm_w+2, 10), border_radius=4)

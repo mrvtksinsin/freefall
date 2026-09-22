@@ -20,6 +20,7 @@ class TouchControls:
         self.right_pressed = False
         self.up_pressed = False
         self.down_pressed = False
+        self.attack_pressed = False  # FAZ6: combat
         self.scale_x = 1.0
         self.scale_y = 1.0
         self.screen_w = config.SCREEN_WIDTH
@@ -32,6 +33,13 @@ class TouchControls:
         self._swipe_start_y = None
         self._swipe_last_y = None
         self._swipe_threshold = 22  # game px, küçük hareketi swipe sayma
+        # FAZ15: multitouch + safe area (notch/gesture)
+        self.active_touches = {}
+        self.safe_margin = 14  # px game, kenardan güvenli mesafe
+        # FAZ15: multitouch tracking (finger_id -> gx,gy) — single-touch de calisir
+        self.active_touches = {}
+        # safe area margin (notch/gesture) — top/bottom/edge
+        self.safe_margin = 14  # px game koordinatinda, kenardan uzak tut
 
     def set_screen_info(self, real_w, real_h, scale_x, scale_y, offset_x=0, offset_y=0):
         self.real_w = real_w
@@ -69,30 +77,82 @@ class TouchControls:
                     elif event.type == pygame.MOUSEMOTION and getattr(event, 'buttons', (0,))[0]:
                         return self._handle_swipe(gx, gy, pygame.FINGERMOTION, game_state, game)
 
+        # FAZ15: multitouch — finger_id ile OR, tek parmak fallback korunur
         if event.type in (pygame.FINGERDOWN, pygame.FINGERUP, pygame.FINGERMOTION):
-            # finger x,y 0-1 normalize
+            fid = getattr(event, 'finger_id', 0)
             x = event.x * self.real_w
             y = event.y * self.real_h
             gx, gy = self._to_game_pos((x, y))
-            return self._update_from_pos(gx, gy, event.type)
+            if event.type == pygame.FINGERDOWN:
+                self.active_touches[fid] = (gx, gy)
+            elif event.type == pygame.FINGERMOTION:
+                self.active_touches[fid] = (gx, gy)
+            elif event.type == pygame.FINGERUP:
+                self.active_touches.pop(fid, None)
+            if not self.active_touches:
+                return self._update_from_pos(gx, gy, event.type)
+            return self._update_from_multitouch(event.type)
         elif event.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION):
-            # Android'de mouse olarak da gelebilir
             if hasattr(event, 'pos'):
                 gx, gy = self._to_game_pos(event.pos)
                 if event.type == pygame.MOUSEBUTTONDOWN:
+                    self.active_touches['mouse'] = (gx, gy)
                     return self._update_from_pos(gx, gy, pygame.FINGERDOWN)
                 elif event.type == pygame.MOUSEBUTTONUP:
-                    # parmak kalktı - tümünü bırak
+                    self.active_touches.pop('mouse', None)
                     self.left_pressed = False
                     self.right_pressed = False
                     self.down_pressed = False
                     self.up_pressed = False
+                    self.attack_pressed = False
+                    self.active_touches.clear()
                     self._swipe_start_y = None
                     self._swipe_last_y = None
                     return False
                 elif event.type == pygame.MOUSEMOTION and event.buttons[0]:
+                    self.active_touches['mouse'] = (gx, gy)
                     return self._update_from_pos(gx, gy, pygame.FINGERMOTION)
         return False
+
+    def _update_from_multitouch(self, typ):
+        """FAZ15: tum aktif dokunmalarin OR'u — hareket+jump+attack ayni anda."""
+        if typ == pygame.FINGERUP and not self.active_touches:
+            self.left_pressed = False
+            self.right_pressed = False
+            self.down_pressed = False
+            self.up_pressed = False
+            self.attack_pressed = False
+            return False
+        lp = rp = up = dp = ap = False
+        for gx, gy in self.active_touches.values():
+            if gx > config.SCREEN_WIDTH - 100 and gy < 120 and gy > 70:
+                ap = True
+                continue
+            if gy < 70:
+                continue
+            if gy > config.SCREEN_HEIGHT - 140:
+                if gx < config.SCREEN_WIDTH * 0.4:
+                    lp = True
+                elif gx > config.SCREEN_WIDTH * 0.6:
+                    rp = True
+                else:
+                    if gy < config.SCREEN_HEIGHT - 70:
+                        up = True
+                    else:
+                        dp = True
+            else:
+                if gx < config.SCREEN_WIDTH * 0.33:
+                    lp = True
+                elif gx > config.SCREEN_WIDTH * 0.66:
+                    rp = True
+                else:
+                    up = True
+        self.left_pressed = lp
+        self.right_pressed = rp
+        self.up_pressed = up
+        self.down_pressed = dp
+        self.attack_pressed = ap
+        return bool(lp or rp or up or dp or ap)
 
     def _handle_swipe(self, gx, gy, typ, game_state, game):
         """Shop/inventory/levels için dikey swipe scroll"""
@@ -152,17 +212,25 @@ class TouchControls:
         return False
 
     def _update_from_pos(self, gx, gy, typ):
-        # alt %30'luk alanda dokunmatik joystick
-        # ekranı dikeyde 3'e böl: üst %15 pause, orta oyun, alt %25 kontroller
+        # FAZ6: attack button (top-right, only in playing) - 88x88 at 800,16
+        if typ == pygame.FINGERDOWN:
+            # attack area check before other controls (top-right corner)
+            if gx > config.SCREEN_WIDTH - 100 and gy < 120 and gy > 70:
+                self.attack_pressed = True
+                return True
         if typ == pygame.FINGERUP:
             self.left_pressed = False
             self.right_pressed = False
             self.down_pressed = False
             self.up_pressed = False
+            self.attack_pressed = False
             return False
 
-        # pause alanı (üst bar)
+        # pause alanı (üst bar) - but attack area already handled above
         if gy < 70:
+            # if attack area, already handled; else let UI handle
+            if gx > config.SCREEN_WIDTH - 100 and gy < 120:
+                return True
             return False  # oyun UI'sine bırak
 
         # alt kontrol bölgesi
@@ -196,8 +264,9 @@ class TouchControls:
             return True
 
     def reset_frame(self):
-        # tek seferlik up (zıpla) bir frame sonra bırak
+        # tek seferlik up (zıpla) ve attack bir frame sonra bırak
         self.up_pressed = False
+        self.attack_pressed = False
 
     def get_keys(self):
         """pygame.key.get_pressed() benzeri dict döndür"""
@@ -218,7 +287,23 @@ class TouchControls:
         return False
 
     def draw(self, surf, game_state):
-        """Alt kontrol overlay çiz - sadece playing'de"""
+        """Alt kontrol overlay çiz - sadece playing'de + FAZ6 attack button"""
+        if game_state not in ("playing", "vs_bot", "vs_online"):
+            return
+        # FAZ6: attack button top-right
+        atk_rect = pygame.Rect(config.SCREEN_WIDTH - 92, 16, 76, 76)
+        atk_col = (255, 80, 80, 180) if self.attack_pressed else (255, 220, 80, 110)
+        # use normal surface for attack button (not bar)
+        pygame.draw.rect(surf, (255, 255, 255, 70), atk_rect, border_radius=14)
+        pygame.draw.rect(surf, (0,0,0,160), atk_rect, width=2, border_radius=14)
+        if self.attack_pressed:
+            pygame.draw.rect(surf, (255, 60, 60), atk_rect, width=3, border_radius=14)
+        font = pygame.font.SysFont("Arial", 22, bold=True)
+        txt = font.render("HIT", True, (0,0,0))
+        surf.blit(txt, (atk_rect.centerx - txt.get_width()//2, atk_rect.centery - txt.get_height()//2 - 6))
+        small = pygame.font.SysFont("Arial", 9, bold=True)
+        t2 = small.render("SALDIR", True, (0,0,0))
+        surf.blit(t2, (atk_rect.centerx - t2.get_width()//2, atk_rect.centery + 10))
         if game_state != "playing":
             return
         # yarı şeffaf bar
@@ -226,16 +311,19 @@ class TouchControls:
         bar = pygame.Surface((config.SCREEN_WIDTH, bar_h), pygame.SRCALPHA)
         bar.fill((0, 0, 0, 70))
         surf.blit(bar, (0, config.SCREEN_HEIGHT - bar_h))
-        # sol ok
+        # sol ok — FAZ15: safe margin + pressed glow
         left_col = (255, 215, 0, 180) if self.left_pressed else (255, 255, 255, 90)
-        left_rect = pygame.Rect(20, config.SCREEN_HEIGHT - 75, 100, 60)
+        # safe area: kenardan 14px icte (notch/gesture)
+        left_rect = pygame.Rect(20 + self.safe_margin//2, config.SCREEN_HEIGHT - 75, 100, 60)
         pygame.draw.rect(surf, (255, 255, 255, 60), left_rect, border_radius=12)
         pygame.draw.rect(surf, (0, 0, 0, 180), left_rect, width=2, border_radius=12)
+        if self.left_pressed:
+            pygame.draw.rect(surf, (255, 215, 0), left_rect, width=3, border_radius=12)
         font = pygame.font.SysFont("Arial", 28, bold=True)
         txt = font.render("◀", True, (0, 0, 0) if not self.left_pressed else (0, 0, 0))
         surf.blit(txt, (left_rect.centerx - txt.get_width() // 2, left_rect.centery - txt.get_height() // 2))
         # sağ ok
-        right_rect = pygame.Rect(config.SCREEN_WIDTH - 120, config.SCREEN_HEIGHT - 75, 100, 60)
+        right_rect = pygame.Rect(config.SCREEN_WIDTH - 120 - self.safe_margin//2, config.SCREEN_HEIGHT - 75, 100, 60)
         pygame.draw.rect(surf, (255, 255, 255, 60), right_rect, border_radius=12)
         pygame.draw.rect(surf, (0, 0, 0, 180), right_rect, width=2, border_radius=12)
         txt2 = font.render("▶", True, (0, 0, 0))
